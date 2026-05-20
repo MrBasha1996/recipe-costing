@@ -1,4 +1,5 @@
 [build]
+  base = "recipe-costing"
   command = "next build"
   publish = ".next"
 
