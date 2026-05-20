@@ -1,0 +1,37 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell([System.IO.Directory]::GetFiles\\(\"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\"\\))",
+      "PowerShell(Get-ChildItem \"c:\\\\Users\\\\HP\\\\Downloads\" | ForEach-Object { $_.Name })",
+      "Bash(npm --version)",
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "PowerShell($env:PATH -split \";\")",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); node --version; npm --version)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm install @supabase/supabase-js @supabase/ssr zustand @tanstack/react-table recharts react-hook-form @hookform/resolvers zod 2>&1)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm install xlsx 2>&1; npm install --save-dev @types/node 2>&1)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npx tsc --noEmit 2>&1 | Select-Object -First 40)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Get-Command psql -ErrorAction SilentlyContinue; Get-ChildItem \"C:\\\\Program Files\\\\PostgreSQL\" -ErrorAction SilentlyContinue | Select-Object Name)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); npm list -g --depth=0 2>&1 | Select-String \"supabase\"; Get-Command supabase -ErrorAction SilentlyContinue)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm install --save-dev pg @types/pg 2>&1 | Select-String -Pattern \"added|error\" | Select-Object -First 5)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm install --save-dev pg @types/pg --legacy-peer-deps 2>&1 | Select-String -Pattern \"added|error\" | Select-Object -First 5)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; node scripts/migrate.mjs 2>&1)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; node scripts/create-admin.mjs 2>&1)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm run dev 2>&1 | Select-Object -First 20)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; node -e \"console.log\\(require\\('./node_modules/next/package.json'\\).version\\)\")",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue; Remove-Item -Force package-lock.json -ErrorAction SilentlyContinue; Write-Host \"Cleaned\")",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm install 2>&1 | Select-Object -Last 8)",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npm run dev 2>&1 | Select-Object -First 15)",
+      "Read(//c/Users/HP/Downloads/ꬩ�� �驫��/**)",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\HP\\\\Downloads\\\\ꬩ�� �驫��\\\\recipe-costing\\\\app\\\\\\(dashboard\\)\\\\costing\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\HP\\\\Downloads\\\\ꬩ�� �驫��\\\\recipe-costing\\\\app\\\\\\(dashboard\\)\\\\products\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\HP\\\\Downloads\\\\ꬩ�� �驫��\\\\recipe-costing\\\\app\\\\\\(dashboard\\)\\\\ingredients\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\HP\\\\Downloads\\\\ꬩ�� �驫��\\\\recipe-costing\\\\app\\\\\\(dashboard\\)\\\\dashboard\")",
+      "PowerShell(New-Item -ItemType Directory -Force \"c:\\\\Users\\\\HP\\\\Downloads\\\\ꬩ�� �驫��\\\\recipe-costing\\\\app\\\\\\(dashboard\\)\\\\users\")",
+      "PowerShell($env:PATH = [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"PATH\", \"User\"\\); Set-Location \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\\\\recipe-costing\"; npx tsc --noEmit 2>&1 | Select-Object -First 30)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\HP\\Downloads\\ꬩ�� �驫��"
+    ]
+  }
+}

@@ -1,0 +1,172 @@
+export type BrandId = 'ti' | 'bb'
+export type Role = 'accountant' | 'ops' | 'kitchen'
+export type BrandAccess = 'ti' | 'bb' | 'all'
+export type ProductCategory = 'Meal' | 'Batch'
+export type ItemType = 'ingredient' | 'product'
+
+export interface Brand {
+  id: BrandId
+  name: string
+  name_ar: string
+}
+
+export interface UserProfile {
+  id: string
+  username: string
+  name_ar: string
+  role: Role
+  brand_access: BrandAccess
+  created_at: string
+}
+
+export interface Product {
+  sku: string
+  brand_id: BrandId
+  name: string
+  category: ProductCategory
+  price: number
+  app_price: number | null
+  app_sku: string | null
+  unit: string | null
+  is_semi: boolean
+  is_base: boolean
+  created_at: string
+}
+
+export interface Ingredient {
+  sku: string
+  brand_id: BrandId
+  name: string
+  category: string
+  unit: string
+  cost: number
+  is_base: boolean
+  created_at: string
+}
+
+export type IngredientSection = 'food' | 'packaging'
+export type ServiceType = 'both' | 'dine_in' | 'dine_out'
+
+export interface RecipeIngredientRow {
+  id: string
+  recipe_id: string
+  ing_sku: string
+  ing_name: string
+  qty: number
+  unit: string
+  unit_cost: number
+  yield_pct: number
+  is_semi: boolean
+  sort_order: number
+  section: IngredientSection
+  service_type: ServiceType
+}
+
+export interface Recipe {
+  id: string
+  sku: string
+  brand_id: BrandId
+  product_name: string
+  is_semi: boolean
+  version: number
+  version_name: string | null
+  is_active: boolean
+  is_approved: boolean
+  approved_by: string | null
+  approved_at: string | null
+  sell_price: number
+  app_price: number | null
+  yield_portions: number
+  total_cost: number
+  food_cost_pct: number
+  margin: number
+  margin_app: number | null
+  dine_out_total_cost: number | null
+  dine_out_food_cost_pct: number | null
+  dine_out_margin: number | null
+  saved_by: string | null
+  saved_at: string
+  recipe_ingredients?: RecipeIngredientRow[]
+}
+
+export interface PriceHistory {
+  id: string
+  brand_id: BrandId
+  sku: string
+  item_name: string
+  item_type: ItemType
+  old_price: number
+  new_price: number
+  changed_by: string | null
+  changed_at: string
+}
+
+export interface AuditLog {
+  id: string
+  brand_id: string | null
+  action: string
+  entity_type: string
+  entity_sku: string | null
+  entity_name: string | null
+  performed_by: string | null
+  metadata: Record<string, unknown> | null
+  created_at: string
+}
+
+export type MovementType = 'in' | 'out' | 'waste' | 'adjustment'
+
+export interface StockItem {
+  id: string
+  brand_id: BrandId
+  ing_sku: string
+  ing_name: string
+  unit: string
+  current_qty: number
+  min_qty: number
+  updated_at: string
+}
+
+export interface StockMovement {
+  id: string
+  brand_id: BrandId
+  ing_sku: string
+  ing_name: string
+  movement_type: MovementType
+  qty: number
+  note: string | null
+  performed_by: string | null
+  created_at: string
+}
+
+// ── Costing / Calculation types ──────────────────────────────────
+
+export interface RecipeRowDraft {
+  id: string
+  ing_sku: string
+  ing_name: string
+  qty: number
+  unit: string
+  unit_cost: number
+  yield_pct: number
+  is_semi: boolean
+  section: IngredientSection
+  service_type: ServiceType
+}
+
+export interface FoodCostResult {
+  totalCost: number
+  perPortionCost: number
+  foodCostPct: number
+  margin: number
+  marginApp: number | null
+}
+
+// ── Component search item (ingredient or semi-product) ──────────
+export interface ComponentItem {
+  sku: string
+  name: string
+  unit: string
+  cost: number
+  category: string
+  is_semi: boolean
+}
