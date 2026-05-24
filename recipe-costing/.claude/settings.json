@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh auth *)",
+      "PowerShell(gh auth status)",
+      "Bash(git remote *)",
+      "Bash(git branch *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git ls-tree *)",
+      "Bash(ls \"c:\\\\Users\\\\HP\\\\Downloads\\\\مشروع الرسبي\")",
+      "Read(//c/Users/HP/Downloads/مشروع الرسبي/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\HP\\Downloads\\مشروع الرسبي"
+    ]
+  }
+}
