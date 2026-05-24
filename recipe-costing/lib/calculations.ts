@@ -44,9 +44,11 @@ export function calcServiceCost(
   )
   const portions = Math.max(yieldPortions, 1)
   const perPortionCost = totalCost / portions
-  const foodCostPct = sellPrice > 0 ? (perPortionCost / sellPrice) * 100 : 0
-  const margin = sellPrice - perPortionCost
-  const marginApp = appPrice != null ? appPrice - perPortionCost : null
+  const sellPriceExVat = sellPrice / 1.15
+  const appPriceExVat = appPrice != null ? appPrice / 1.15 : null
+  const foodCostPct = sellPriceExVat > 0 ? (perPortionCost / sellPriceExVat) * 100 : 0
+  const margin = sellPriceExVat - perPortionCost
+  const marginApp = appPriceExVat != null ? appPriceExVat - perPortionCost : null
 
   return { totalCost, perPortionCost, foodCostPct, margin, marginApp }
 }

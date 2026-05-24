@@ -29,9 +29,10 @@ export default function RecipeCostBar({
   const foodPortion = foodTotal / portions
   const packPortion = packTotal / portions
   const totalPortion = foodPortion + packPortion
-  const margin = sellPrice - totalPortion
+  const priceExVat = sellPrice / 1.15
+  const margin = priceExVat - totalPortion
 
-  const base = sellPrice > 0 ? sellPrice : totalPortion
+  const base = priceExVat > 0 ? priceExVat : totalPortion
   const foodPct  = base > 0 ? (foodPortion  / base) * 100 : 0
   const packPct  = base > 0 ? (packPortion  / base) * 100 : 0
   const marginPct = base > 0 ? Math.max(0, (margin / base) * 100) : 0
