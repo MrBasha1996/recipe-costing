@@ -50,6 +50,10 @@ export default function DashboardShell({
     useBrandStore.persist.rehydrate()
     // localStorage is sync — rehydrate completes before this line
     useBrandStore.getState().setHydrated(true)
+    // Force single-brand users to their allowed brand regardless of persisted value
+    if (profile.brand_access !== 'all') {
+      useBrandStore.getState().setBrand(profile.brand_access as BrandId)
+    }
     setProfile(profile)
     setMounted(true)
     // Load RBAC permissions once after login
