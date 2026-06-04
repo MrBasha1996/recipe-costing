@@ -8,10 +8,13 @@ interface BrandStore {
   brand: BrandId
   brandPicked: boolean
   nav: NavTab
+  /** true after localStorage has been read — prevents data-fetch with wrong default brand */
+  hydrated: boolean
   setBrand: (b: BrandId) => void
   pickBrand: (b: BrandId) => void
   setNav: (n: NavTab) => void
   resetPick: () => void
+  setHydrated: (v: boolean) => void
 }
 
 export const useBrandStore = create<BrandStore>()(
@@ -20,11 +23,22 @@ export const useBrandStore = create<BrandStore>()(
       brand: 'ti',
       brandPicked: false,
       nav: 'costing',
+      hydrated: false,
       setBrand: (brand) => set({ brand }),
       pickBrand: (brand) => set({ brand, brandPicked: true }),
       setNav: (nav) => set({ nav }),
       resetPick: () => set({ brandPicked: false }),
+      setHydrated: (hydrated) => set({ hydrated }),
     }),
-    { name: 'brand-store', skipHydration: true }
+    {
+      name: 'brand-store',
+      skipHydration: true,
+      // Only persist brand selection — not the hydrated flag
+      partialize: (state) => ({
+        brand: state.brand,
+        brandPicked: state.brandPicked,
+        nav: state.nav,
+      }),
+    }
   )
 )

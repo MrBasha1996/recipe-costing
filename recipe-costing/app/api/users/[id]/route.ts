@@ -20,12 +20,28 @@ export async function PATCH(
   if (!caller) return NextResponse.json({ error: 'غير مصرح' }, { status: 403 })
 
   const { id } = await params
-  const { name_ar, role, brand_access } = await request.json()
+  const { name_ar, brand_access, role_id } = await request.json()
 
   const admin = createAdminClient()
+
+  // Auto-compute legacy role from RBAC group (keeps RLS working)
+  const legacyRole = role_id !== undefined
+    ? await (async () => {
+        if (!role_id) return 'ops'
+        const { data } = await admin.from('roles').select('is_super_admin').eq('id', role_id).single()
+        return data?.is_super_admin ? 'accountant' : 'ops'
+      })()
+    : undefined
+
+  const updatePayload: Record<string, unknown> = { name_ar, brand_access }
+  if (role_id !== undefined) {
+    updatePayload.role_id = role_id ?? null
+    if (legacyRole) updatePayload.role = legacyRole
+  }
+
   const { error } = await admin
     .from('user_profiles')
-    .update({ name_ar, role, brand_access })
+    .update(updatePayload)
     .eq('id', id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })

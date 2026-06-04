@@ -16,6 +16,7 @@ export interface UserProfile {
   name_ar: string
   role: Role
   brand_access: BrandAccess
+  role_id?: string | null  // FK to roles table (new RBAC system)
   created_at: string
 }
 
@@ -293,4 +294,56 @@ export interface ComponentItem {
   cost: number
   category: string
   is_semi: boolean
+}
+
+// ── RBAC ─────────────────────────────────────────────────────────
+
+export interface RbacRole {
+  id: string
+  name: string
+  description: string | null
+  is_super_admin: boolean
+  is_system: boolean
+  created_at: string
+}
+
+export interface Module {
+  id: string
+  code: string
+  name: string
+  sort_order: number
+  is_active: boolean
+}
+
+export interface RolePermission {
+  id: string
+  role_id: string
+  module_id: string
+  can_view: boolean
+  can_create: boolean
+  can_update: boolean
+  can_delete: boolean
+}
+
+export type PermissionAction = 'view' | 'create' | 'update' | 'delete'
+
+export interface PermissionsMap {
+  [moduleCode: string]: {
+    can_view: boolean
+    can_create: boolean
+    can_update: boolean
+    can_delete: boolean
+  }
+}
+
+export interface RbacAuditLog {
+  id: string
+  performed_by: string | null
+  action: string
+  entity_type: string
+  entity_id: string | null
+  entity_name: string | null
+  old_data: Record<string, unknown> | null
+  new_data: Record<string, unknown> | null
+  created_at: string
 }

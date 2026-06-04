@@ -84,6 +84,12 @@ body {
   /* Selective print: Dine In hides DO columns, Dine Out hides DI columns */
   body[data-print-mode="di"] .print-do-only { display: none !important; }
   body[data-print-mode="do"] .print-di-only { display: none !important; }
+
+  /* Kitchen print: hide full price view, show kitchen view only */
+  body[data-print-mode="kitchen"] .print-full-view  { display: none !important; }
+  body[data-print-mode="kitchen"] .print-kitchen-view { display: block !important; }
+  /* When not kitchen mode, hide kitchen view */
+  body:not([data-print-mode="kitchen"]) .print-kitchen-view { display: none !important; }
 }
 
 /* ── Sidebar nav transitions ─────────────────────────────── */

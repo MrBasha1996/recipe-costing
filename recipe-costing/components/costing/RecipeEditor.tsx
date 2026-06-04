@@ -524,7 +524,7 @@ export default function RecipeEditor() {
     }
   }
 
-  function printService(mode: 'di' | 'do') {
+  function printService(mode: 'di' | 'do' | 'kitchen') {
     document.body.dataset.printMode = mode
     window.print()
     delete document.body.dataset.printMode
@@ -565,6 +565,10 @@ export default function RecipeEditor() {
         productName={currentProduct.name}
         sku={currentProduct.sku}
         isSemi={currentProduct.is_semi}
+        yieldPortions={yieldPortions}
+        brandName={brand === 'ti' ? 'Three In' : 'باب البلد'}
+        version={savedRecipe?.version ?? null}
+        isApproved={savedRecipe?.is_approved ?? false}
         foodRows={foodRows}
         diPackaging={diPackaging}
         doPackaging={doPackaging}
@@ -585,8 +589,8 @@ export default function RecipeEditor() {
 
   return (
     <>
-      {/* ── Print view ──────────────────────────────── */}
-      <div className="hidden print:block" style={{ fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", direction: 'rtl', color: '#111', fontSize: '11px' }}>
+      {/* ── Print view (full — with prices) ─────────── */}
+      <div className="hidden print:block print-full-view" style={{ fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", direction: 'rtl', color: '#111', fontSize: '11px' }}>
 
         {/* Header */}
         <div style={{ background: '#1a3a4a', color: 'white', padding: '12px 20px', marginBottom: '0', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -797,6 +801,22 @@ export default function RecipeEditor() {
         </div>
       </div>
 
+      {/* ── Kitchen print view (no prices) ──────────── */}
+      <div className="hidden print-kitchen-view" style={{ fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", direction: 'rtl', color: '#111', fontSize: '11px' }}>
+        <KitchenPrintView
+          productName={currentProduct.name}
+          sku={currentProduct.sku}
+          isSemi={currentProduct.is_semi}
+          yieldPortions={yieldPortions}
+          brandName={brand === 'ti' ? 'Three In' : 'باب البلد'}
+          version={savedRecipe?.version ?? null}
+          isApproved={savedRecipe?.is_approved ?? false}
+          foodRows={foodRows}
+          diPackaging={diPackaging}
+          doPackaging={doPackaging}
+        />
+      </div>
+
       {/* ── Screen view ─────────────────────────────── */}
       <div className="print:hidden flex flex-col h-full overflow-hidden">
 
@@ -926,6 +946,14 @@ export default function RecipeEditor() {
             >
               🖨 Dine Out
             </button>
+            {savedRecipe && rows.length > 0 && (
+              <button
+                onClick={() => printService('kitchen')}
+                className="text-xs px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg transition-colors"
+              >
+                🍽 مطبخ
+              </button>
+            )}
             {isMgmt && savedRecipe && (
               <button
                 onClick={handleSavePriceOnly}
@@ -1257,6 +1285,10 @@ interface SimpleRecipeViewProps {
   productName: string
   sku: string
   isSemi: boolean
+  yieldPortions: number
+  brandName: string
+  version: number | null
+  isApproved: boolean
   foodRows: RecipeRowDraft[]
   diPackaging: RecipeRowDraft[]
   doPackaging: RecipeRowDraft[]
@@ -1272,22 +1304,54 @@ interface SimpleRecipeViewProps {
 
 function SimpleRecipeView({
   productName, sku, isSemi,
+  yieldPortions, brandName, version, isApproved,
   foodRows, diPackaging, doPackaging,
   activeService, onServiceChange,
   canEdit, onQtyChange, onSave, saving, dirty, saveMsg,
 }: SimpleRecipeViewProps) {
   const activePackaging = activeService === 'dine_in' ? diPackaging : doPackaging
 
+  function handleKitchenPrint() {
+    document.body.dataset.printMode = 'kitchen'
+    window.print()
+    delete document.body.dataset.printMode
+  }
+
   return (
     <div className="flex-1 overflow-y-auto">
+      {/* Kitchen print view — visible only when printing */}
+      <div className="hidden print-kitchen-view" style={{ fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", direction: 'rtl', color: '#111', fontSize: '11px' }}>
+        <KitchenPrintView
+          productName={productName}
+          sku={sku}
+          isSemi={isSemi}
+          yieldPortions={yieldPortions}
+          brandName={brandName}
+          version={version}
+          isApproved={isApproved}
+          foodRows={foodRows}
+          diPackaging={diPackaging}
+          doPackaging={doPackaging}
+        />
+      </div>
+
+      <div className="print:hidden">
       <div className="px-5 pt-5 pb-4 border-b border-gray-200 bg-white">
-        <div className="flex items-center gap-2 mb-1">
-          <h2 className="text-lg font-bold text-gray-900">{productName}</h2>
-          {isSemi && (
-            <span className="text-xs bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-full">
-              ⚙ Batch
-            </span>
-          )}
+        <div className="flex items-center justify-between gap-3 mb-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-gray-900">{productName}</h2>
+            {isSemi && (
+              <span className="text-xs bg-purple-50 text-purple-600 border border-purple-200 px-2 py-0.5 rounded-full">
+                ⚙ Batch
+              </span>
+            )}
+          </div>
+          <button
+            onClick={handleKitchenPrint}
+            className="text-xs px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg transition-colors flex-shrink-0"
+          >
+            🍽 طباعة المطبخ
+          </button>
         </div>
         <p className="text-xs text-gray-400 font-mono mb-3">{sku}</p>
         <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit">
@@ -1412,6 +1476,151 @@ function SimpleRecipeView({
         {saveMsg?.ok && !dirty && (
           <p className="mt-3 text-xs text-green-600">{saveMsg.text}</p>
         )}
+      </div>
+      </div>{/* end print:hidden */}
+    </div>
+  )
+}
+
+// ── KitchenPrintView — no prices ─────────────────────────────────
+
+interface KitchenPrintViewProps {
+  productName: string
+  sku: string
+  isSemi: boolean
+  yieldPortions: number
+  brandName: string
+  version: number | null
+  isApproved: boolean
+  foodRows: RecipeRowDraft[]
+  diPackaging: RecipeRowDraft[]
+  doPackaging: RecipeRowDraft[]
+}
+
+function KitchenIngTable({ rows, emptyMsg }: { rows: RecipeRowDraft[]; emptyMsg?: string }) {
+  if (rows.length === 0) {
+    return <p style={{ color: '#9ca3af', fontSize: '10px', margin: '4px 0 10px' }}>{emptyMsg ?? 'لا يوجد'}</p>
+  }
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10.5px', marginBottom: '12px' }}>
+      <thead>
+        <tr style={{ background: '#1a3a4a', color: 'white' }}>
+          <th style={{ textAlign: 'right', padding: '5px 10px', fontWeight: '600' }}>المكوّن</th>
+          <th style={{ textAlign: 'center', padding: '5px 8px', width: '60px', fontWeight: '600' }}>الكمية</th>
+          <th style={{ textAlign: 'center', padding: '5px 8px', width: '60px', fontWeight: '600' }}>الوحدة</th>
+          <th style={{ textAlign: 'center', padding: '5px 8px', width: '56px', fontWeight: '600' }}>Yield%</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={r.id} style={{ background: i % 2 === 0 ? 'white' : '#f8f9fa', borderBottom: '1px solid #e5e7eb' }}>
+            <td style={{ padding: '6px 10px' }}>
+              {r.ing_name}
+              {r.is_semi && <span style={{ fontSize: '8px', marginRight: '5px', color: '#9a6f1e', background: '#fdf3dc', padding: '1px 4px', borderRadius: '3px' }}>Batch</span>}
+            </td>
+            <td style={{ textAlign: 'center', padding: '6px 8px', fontFamily: 'monospace', fontWeight: '700', fontSize: '12px' }}>{r.qty}</td>
+            <td style={{ textAlign: 'center', padding: '6px 8px', color: '#6b7280' }}>{r.unit}</td>
+            <td style={{ textAlign: 'center', padding: '6px 8px', fontFamily: 'monospace', color: '#6b7280' }}>{r.yield_pct}%</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
+function KitchenPrintView({
+  productName, sku, isSemi, yieldPortions, brandName,
+  version, isApproved, foodRows, diPackaging, doPackaging,
+}: KitchenPrintViewProps) {
+  const hasDoOnly = doPackaging.length > 0 && (
+    doPackaging.length !== diPackaging.length ||
+    doPackaging.some(r => !diPackaging.find(d => d.ing_sku === r.ing_sku))
+  )
+  const today = new Date().toLocaleDateString('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' })
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ background: '#14532d', color: 'white', padding: '12px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: '8px', opacity: 0.65, letterSpacing: '0.15em', textTransform: 'uppercase', marginBottom: '3px' }}>
+            Kitchen Card — بطاقة المطبخ
+          </div>
+          <div style={{ fontSize: '22px', fontWeight: '700', lineHeight: 1.2 }}>{productName}</div>
+          <div style={{ fontSize: '9px', opacity: 0.65, fontFamily: 'monospace', marginTop: '3px' }}>
+            {sku}{version ? `  ·  إصدار ${version}` : ''}{isApproved ? '  ·  معتمدة ✓' : ''}
+          </div>
+        </div>
+        <div style={{ textAlign: 'left' }}>
+          <div style={{ fontSize: '12px', fontWeight: '700' }}>{brandName}</div>
+          <div style={{ fontSize: '9px', opacity: 0.7, marginTop: '3px' }}>{today}</div>
+        </div>
+      </div>
+      <div style={{ height: '3px', background: '#22c55e', marginBottom: '14px' }} />
+
+      {/* Info row */}
+      <div style={{ display: 'flex', gap: '24px', marginBottom: '16px', padding: '8px 14px', border: '1px solid #d1fae5', background: '#f0fdf4', borderRadius: '6px' }}>
+        <div>
+          <div style={{ fontSize: '8px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>النوع</div>
+          <div style={{ fontWeight: '700', fontSize: '12px' }}>{isSemi ? 'Batch — منتج وسيط' : 'Meal — وجبة'}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '8px', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+            {isSemi ? 'الوحدات' : 'الحصص'}
+          </div>
+          <div style={{ fontWeight: '700', fontFamily: 'monospace', fontSize: '18px' }}>{yieldPortions}</div>
+        </div>
+      </div>
+
+      {/* Food ingredients */}
+      <div style={{ marginBottom: '16px' }}>
+        <div style={{ fontSize: '9px', fontWeight: '700', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#15803d', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#15803d', display: 'inline-block' }} />
+          المواد الغذائية ({foodRows.length})
+        </div>
+        <KitchenIngTable rows={foodRows} emptyMsg="لا توجد مواد غذائية" />
+      </div>
+
+      {/* DI Packaging */}
+      {diPackaging.length > 0 && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '9px', fontWeight: '700', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#1b4f72', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#1b4f72', display: 'inline-block' }} />
+            التغليف — Dine In ({diPackaging.length})
+          </div>
+          <KitchenIngTable rows={diPackaging} />
+        </div>
+      )}
+
+      {/* DO Packaging — only if different from DI */}
+      {hasDoOnly && (
+        <div style={{ marginBottom: '16px' }}>
+          <div style={{ fontSize: '9px', fontWeight: '700', letterSpacing: '0.1em', textTransform: 'uppercase', color: '#c85a1e', marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#c85a1e', display: 'inline-block' }} />
+            التغليف — Dine Out ({doPackaging.length})
+          </div>
+          <KitchenIngTable rows={doPackaging} />
+        </div>
+      )}
+
+      {/* Signature */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '32px', paddingTop: '12px', borderTop: '1px solid #d1fae5', marginTop: '8px' }}>
+        <div>
+          <div style={{ fontSize: '9px', color: '#6b7280', marginBottom: '20px' }}>تحضير بواسطة</div>
+          <div style={{ borderBottom: '1px solid #9ca3af' }} />
+          <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px' }}>الاسم / التاريخ</div>
+        </div>
+        <div>
+          <div style={{ fontSize: '9px', color: '#6b7280', marginBottom: '20px' }}>مراجعة</div>
+          <div style={{ borderBottom: '1px solid #9ca3af' }} />
+          <div style={{ fontSize: '9px', color: '#9ca3af', marginTop: '4px' }}>الاسم / التاريخ</div>
+        </div>
+      </div>
+
+      {/* Footer */}
+      <div style={{ paddingTop: '6px', borderTop: '1px solid #d1fae5', fontSize: '8px', color: '#9ca3af', display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}>
+        <span>Kitchen Card — لا تحتوي هذه البطاقة على أي أسعار</span>
+        <span>{new Date().toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</span>
       </div>
     </div>
   )

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
@@ -98,6 +99,14 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
             </span>
           )}
         </div>
+        {!isMgmt && (
+          <Link
+            href="/costing/import"
+            className="flex items-center justify-center gap-1.5 w-full text-xs font-medium py-1.5 px-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
+          >
+            ⬆ استيراد وصفات
+          </Link>
+        )}
         <input
           type="text"
           placeholder="بحث..."

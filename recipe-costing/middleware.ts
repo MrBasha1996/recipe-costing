@@ -2,7 +2,7 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Routes accessible by 'accountant' role only
-const ACCOUNTANT_ONLY = ['/users', '/dashboard', '/comparison', '/settings', '/purchasing', '/costs']
+const ACCOUNTANT_ONLY = ['/users', '/roles', '/dashboard', '/comparison', '/settings', '/purchasing', '/costs']
 
 // Routes accessible by 'accountant' or 'ops'
 const ACCOUNTANT_OPS = ['/inventory', '/sales', '/waste']

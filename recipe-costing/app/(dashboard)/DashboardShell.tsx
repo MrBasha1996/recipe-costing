@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import BrandSelectorOverlay from '@/components/BrandSelectorOverlay'
 import type { UserProfile, BrandId } from '@/types'
 
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { key: 'inventory',   icon: '📦', label: 'المخزون',       href: '/inventory',   roles: ['accountant','ops'] },
   { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   href: '/dashboard',   roles: ['accountant'] },
   { key: 'users',       icon: '👥', label: 'المستخدمون',    href: '/users',       roles: ['accountant'] },
+  { key: 'roles',       icon: '🔐', label: 'المجموعات',     href: '/roles',       roles: ['accountant'] },
   { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     href: '/settings',    roles: ['accountant'] },
 ]
 
@@ -53,8 +55,15 @@ export default function DashboardShell({
 
   useEffect(() => {
     useBrandStore.persist.rehydrate()
+    // localStorage is sync — rehydrate completes before this line
+    useBrandStore.getState().setHydrated(true)
     setProfile(profile)
     setMounted(true)
+    // Load RBAC permissions once after login
+    if (profile?.id) {
+      const supabase = createClient()
+      usePermissionsStore.getState().loadPermissions(profile.id, supabase)
+    }
   }, [profile, setProfile])
 
   // Show selector on first login if user has access to multiple brands
@@ -76,7 +85,28 @@ export default function DashboardShell({
     router.push('/login')
   }
 
-  const visibleNav = NAV_ITEMS.filter(n => n.roles.includes(profile.role))
+  const { hasPermission, loaded: permLoaded } = usePermissionsStore()
+
+  // When RBAC is loaded and user has a role_id → filter nav by RBAC view permissions
+  // Otherwise fall back to the old hardcoded role system
+  const visibleNav = NAV_ITEMS.filter(n => {
+    if (permLoaded && profile.role_id) {
+      return hasPermission(n.key, 'view')
+    }
+    return n.roles.includes(profile.role)
+  })
+
+  // Redirect to first accessible page if the current URL is not permitted
+  // eslint-disable-next-line react-hooks/rules-of-hooks
+  useEffect(() => {
+    if (!mounted || !permLoaded || !profile.role_id) return
+    const match = NAV_ITEMS.find(n => n.href !== '/' && pathname.startsWith(n.href))
+    if (match && !hasPermission(match.key, 'view')) {
+      const first = NAV_ITEMS.find(n => hasPermission(n.key, 'view'))
+      router.replace(first?.href ?? '/costing')
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mounted, permLoaded, pathname, profile.role_id])
   const activeBrand = mounted ? brand : 'ti'
   const brandName = activeBrand === 'ti' ? 'Three In' : 'باب البلد'
 

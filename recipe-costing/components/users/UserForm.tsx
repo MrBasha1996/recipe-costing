@@ -1,20 +1,16 @@
 'use client'
 
-import { useState } from 'react'
-import type { UserProfile, Role, BrandAccess } from '@/types'
+import { useState, useEffect } from 'react'
+import { createClient } from '@/lib/supabase/client'
+import type { UserProfile, BrandAccess } from '@/types'
+
+interface RoleOption { id: string; name: string; is_super_admin: boolean }
 
 interface Props {
   user: UserProfile | null
   onClose: () => void
   onSaved: () => void
 }
-
-const ROLES: { value: Role; label: string }[] = [
-  { value: 'accountant',  label: 'محاسب — صلاحية كاملة' },
-  { value: 'management',  label: 'إدارة عليا — يرى الأسعار ويعدّل سعر البيع فقط' },
-  { value: 'ops',         label: 'تشغيل — لا يرى الأسعار' },
-  { value: 'kitchen',     label: 'مطبخ — قراءة فقط' },
-]
 
 const BRANDS: { value: BrandAccess; label: string }[] = [
   { value: 'all', label: 'كل العلامات (TI + BB)' },
@@ -29,14 +25,25 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
   const [username, setUsername]       = useState(user?.username ?? '')
   const [email, setEmail]             = useState('')
   const [password, setPassword]       = useState('')
-  const [role, setRole]               = useState<Role>(user?.role ?? 'ops')
   const [brandAccess, setBrandAccess] = useState<BrandAccess>(user?.brand_access ?? 'ti')
+  const [rbacRoleId, setRbacRoleId]   = useState<string>(user?.role_id ?? '')
+  const [rbacRoles, setRbacRoles]     = useState<RoleOption[]>([])
   const [saving, setSaving]           = useState(false)
   const [error, setError]             = useState<string | null>(null)
+
+  useEffect(() => {
+    const supabase = createClient()
+    ;(supabase.from('roles') as any)
+      .select('id, name, is_super_admin')
+      .order('is_super_admin', { ascending: false })
+      .order('name')
+      .then(({ data }: any) => setRbacRoles(data || []))
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (!nameAr.trim()) { setError('الاسم مطلوب'); return }
+    if (!rbacRoleId) { setError('يجب اختيار مجموعة الصلاحيات'); return }
     if (!isEdit && (!email.trim() || !password.trim() || !username.trim())) {
       setError('جميع الحقول مطلوبة'); return
     }
@@ -49,7 +56,11 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
         const res = await fetch(`/api/users/${user!.id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name_ar: nameAr, role, brand_access: brandAccess }),
+          body: JSON.stringify({
+            name_ar: nameAr,
+            brand_access: brandAccess,
+            role_id: rbacRoleId || null,
+          }),
         })
         if (!res.ok) throw new Error((await res.json()).error)
       } else {
@@ -58,7 +69,9 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             email, password, username,
-            name_ar: nameAr, role, brand_access: brandAccess,
+            name_ar: nameAr,
+            brand_access: brandAccess,
+            role_id: rbacRoleId || null,
           }),
         })
         if (!res.ok) throw new Error((await res.json()).error)
@@ -74,7 +87,6 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md shadow-xl">
-        {/* Header */}
         <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
           <h2 className="text-base font-bold text-gray-900">
             {isEdit ? 'تعديل المستخدم' : 'إضافة مستخدم جديد'}
@@ -82,7 +94,6 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl p-1">✕</button>
         </div>
 
-        {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
           {/* Name */}
           <Field label="الاسم بالعربي">
@@ -96,7 +107,7 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
             />
           </Field>
 
-          {/* Add-only fields */}
+          {/* Create-only fields */}
           {!isEdit && (
             <>
               <Field label="اسم المستخدم (username)">
@@ -136,25 +147,27 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
             </>
           )}
 
-          {/* Role */}
-          <Field label="الدور">
-            <div className="space-y-2">
-              {ROLES.map(r => (
-                <label key={r.value} className="flex items-center gap-3 cursor-pointer group">
-                  <input
-                    type="radio"
-                    name="role"
-                    value={r.value}
-                    checked={role === r.value}
-                    onChange={() => setRole(r.value)}
-                    className="accent-blue-500"
-                  />
-                  <span className={`text-sm ${role === r.value ? 'text-gray-900 font-medium' : 'text-gray-500'} group-hover:text-gray-900 transition-colors`}>
-                    {r.label}
-                  </span>
-                </label>
-              ))}
-            </div>
+          {/* RBAC Role — required */}
+          <Field label="المجموعة (الصلاحيات) *">
+            {rbacRoles.length === 0 ? (
+              <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                ⚠ لا توجد مجموعات — أنشئ مجموعات أولاً من صفحة &quot;المجموعات&quot;
+              </div>
+            ) : (
+              <select
+                value={rbacRoleId}
+                onChange={e => setRbacRoleId(e.target.value)}
+                className={inputCls}
+                required
+              >
+                <option value="">اختر مجموعة...</option>
+                {rbacRoles.map(r => (
+                  <option key={r.id} value={r.id}>
+                    {r.name}{r.is_super_admin ? ' ⚡ (صلاحيات كاملة)' : ''}
+                  </option>
+                ))}
+              </select>
+            )}
           </Field>
 
           {/* Brand access */}
@@ -184,7 +197,6 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
             </div>
           )}
 
-          {/* Actions */}
           <div className="flex gap-2 pt-2">
             <button
               type="button"
