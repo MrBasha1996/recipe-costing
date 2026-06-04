@@ -70,7 +70,7 @@ export default function ProductsPage() {
             onChange={e => setSearch(e.target.value)}
             className="bg-white border border-gray-300 rounded-lg px-3 py-2 text-gray-900 text-sm w-56 focus:outline-none focus:border-blue-500"
           />
-          {canEdit() && (
+          {canEdit('products') && (
             <button
               onClick={() => { setEditProduct(null); setShowForm(true) }}
               className="bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
@@ -89,7 +89,7 @@ export default function ProductsPage() {
       ) : (
         <ProductTable
           products={filtered}
-          canEdit={canEdit()}
+          canEdit={canEdit('products')}
           canSeePrices={canSeePrices()}
           onEdit={handleEdit}
           onDelete={handleDelete}

@@ -58,7 +58,7 @@ export default function InventoryPage() {
   const { brand, hydrated } = useBrandStore()
   const { isAccountant, canEdit } = useUserStore()
   const isAcct = isAccountant()
-  const canE = canEdit()
+  const canE = canEdit('inventory')
 
   const [tab, setTab] = useState<Tab>('stock')
   const [stockItems, setStockItems] = useState<StockItem[]>([])

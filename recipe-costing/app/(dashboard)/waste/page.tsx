@@ -31,7 +31,7 @@ const WASTE_TYPES: WasteType[] = ['cancellation', 'return', 'spoilage', 'expiry'
 export default function WastePage() {
   const { brand } = useBrandStore()
   const { profile, canEdit } = useUserStore()
-  const canE = canEdit()
+  const canE = canEdit('waste')
   const months = lastNMonths(12)
 
   const [tab, setTab]           = useState<ViewTab>('log')

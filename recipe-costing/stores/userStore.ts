@@ -6,7 +6,7 @@ interface UserStore {
   profile: UserProfile | null
   setProfile: (p: UserProfile | null) => void
   canSeePrices: () => boolean
-  canEdit: () => boolean
+  canEdit: (module?: string) => boolean
   isAccountant: () => boolean
   isManagement: () => boolean
 }
@@ -18,9 +18,9 @@ export const useUserStore = create<UserStore>()((set) => ({
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
     return isSuperAdmin || hasPermission('costs', 'view')
   },
-  canEdit: () => {
+  canEdit: (module = 'costing') => {
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
-    return isSuperAdmin || hasPermission('costing', 'update')
+    return isSuperAdmin || hasPermission(module, 'update')
   },
   isAccountant: () => usePermissionsStore.getState().isSuperAdmin,
   isManagement: () => {
