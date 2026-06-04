@@ -16,7 +16,7 @@ export const useUserStore = create<UserStore>()((set) => ({
   setProfile: (profile) => set({ profile }),
   canSeePrices: () => {
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
-    return isSuperAdmin || hasPermission('costs', 'view')
+    return isSuperAdmin || hasPermission('costing', 'view')
   },
   canEdit: (module = 'costing') => {
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
