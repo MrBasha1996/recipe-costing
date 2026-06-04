@@ -4,23 +4,25 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
-import type { StockItem, StockMovement, MovementType } from '@/types'
+import type { MovementType, StockMovement } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────
 
-/** Represents either a raw ingredient or a batch product usable in stock */
-interface SearchItem {
+interface InventoryItem {
   sku: string
   name: string
   unit: string
   type: 'ingredient' | 'batch'
+  stock_id: string | null
+  current_qty: number
+  min_qty: number
 }
 
 type Tab = 'stock' | 'add' | 'history'
 
 // ── Helpers ───────────────────────────────────────────────────────
 
-function stockStatus(item: StockItem): 'ok' | 'low' | 'empty' {
+function stockStatus(item: InventoryItem): 'ok' | 'low' | 'empty' {
   if (item.current_qty <= 0) return 'empty'
   if (item.current_qty <= item.min_qty) return 'low'
   return 'ok'
@@ -61,48 +63,84 @@ export default function InventoryPage() {
   const canE = canEdit('inventory')
 
   const [tab, setTab] = useState<Tab>('stock')
-  const [stockItems, setStockItems] = useState<StockItem[]>([])
+  const [items, setItems] = useState<InventoryItem[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
   const [loading, setLoading] = useState(true)
 
   const loadAll = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const [{ data: items }, { data: moves }] = await Promise.all([
-      (supabase.from('stock_items') as any)
-        .select('*')
+
+    const [{ data: ings }, { data: batches }, { data: stockRows }, { data: moves }] = await Promise.all([
+      (supabase.from('ingredients') as any)
+        .select('sku, name, unit')
+        .eq('brand_id', brand),
+      (supabase.from('products') as any)
+        .select('sku, name, unit')
         .eq('brand_id', brand)
-        .order('ing_name'),
+        .or('is_semi.eq.true,category.eq.Batch'),
+      (supabase.from('stock_items') as any)
+        .select('id, ing_sku, current_qty, min_qty')
+        .eq('brand_id', brand),
       (supabase.from('stock_movements') as any)
         .select('*')
         .eq('brand_id', brand)
         .order('created_at', { ascending: false })
         .limit(200),
     ])
-    setStockItems((items as StockItem[]) || [])
+
+    // Build stock map: sku → stock row
+    const stockMap = new Map<string, { id: string; current_qty: number; min_qty: number }>()
+    for (const s of (stockRows || []) as any[]) {
+      stockMap.set(s.ing_sku, { id: s.id, current_qty: s.current_qty, min_qty: s.min_qty })
+    }
+
+    const merged: InventoryItem[] = [
+      ...((ings || []) as any[]).map((i: any) => {
+        const s = stockMap.get(i.sku)
+        return {
+          sku: i.sku, name: i.name, unit: i.unit ?? '—', type: 'ingredient' as const,
+          stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0,
+        }
+      }),
+      ...((batches || []) as any[]).map((b: any) => {
+        const s = stockMap.get(b.sku)
+        return {
+          sku: b.sku, name: b.name, unit: b.unit ?? '—', type: 'batch' as const,
+          stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0,
+        }
+      }),
+    ]
+
+    // Sort: low/empty first, then by name
+    merged.sort((a, b) => {
+      const order = { empty: 0, low: 1, ok: 2 }
+      const diff = order[stockStatus(a)] - order[stockStatus(b)]
+      return diff !== 0 ? diff : a.name.localeCompare(b.name, 'ar')
+    })
+
+    setItems(merged)
     setMovements((moves as StockMovement[]) || [])
     setLoading(false)
   }, [brand])
 
-  // Wait for hydration before fetching — avoids loading 'ti' data when user is on 'bb'
   useEffect(() => {
     if (!hydrated) return
     loadAll()
   }, [loadAll, hydrated])
 
-  const lowCount = stockItems.filter(i => stockStatus(i) !== 'ok').length
+  const lowCount = items.filter(i => stockStatus(i) !== 'ok').length
 
   return (
     <div className="space-y-4 max-w-4xl">
       <div>
         <h1 className="text-xl font-bold text-gray-900">إدارة المخزون</h1>
         <p className="text-gray-500 text-sm mt-0.5">
-          {stockItems.length} صنف
+          {items.length} صنف
           {lowCount > 0 && <span className="text-amber-600 mr-2">· {lowCount} تحتاج انتباه</span>}
         </p>
       </div>
 
-      {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit">
         {([['stock', 'المخزون الحالي'], ['add', 'إضافة حركة'], ['history', 'سجل الحركات']] as [Tab, string][]).map(([v, l]) => (
           <button
@@ -122,20 +160,10 @@ export default function InventoryPage() {
       ) : (
         <>
           {tab === 'stock' && (
-            <StockTab
-              items={stockItems}
-              isAcct={isAcct}
-              canE={canE}
-              brand={brand as import('@/types').BrandId}
-              onRefresh={loadAll}
-            />
+            <StockTab items={items} canE={canE} brand={brand as import('@/types').BrandId} onRefresh={loadAll} />
           )}
           {tab === 'add' && (
-            <AddMovementTab
-              stockItems={stockItems}
-              brand={brand as import('@/types').BrandId}
-              onSaved={loadAll}
-            />
+            <AddMovementTab items={items} brand={brand as import('@/types').BrandId} onSaved={loadAll} />
           )}
           {tab === 'history' && (
             <HistoryTab movements={movements} />
@@ -148,50 +176,63 @@ export default function InventoryPage() {
 
 // ── Tab 1: Current Stock ─────────────────────────────────────────
 
-function StockTab({
-  items, isAcct, canE, brand, onRefresh,
-}: {
-  items: StockItem[]
-  isAcct: boolean
+function StockTab({ items, canE, brand, onRefresh }: {
+  items: InventoryItem[]
   canE: boolean
   brand: import('@/types').BrandId
   onRefresh: () => void
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editQty, setEditQty] = useState('')
+  const [editingSku, setEditingSku] = useState<string | null>(null)
   const [editMin, setEditMin] = useState('')
   const [saving, setSaving] = useState(false)
-  const [addOpen, setAddOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'ingredient' | 'batch'>('all')
 
-  async function saveEdit(item: StockItem) {
+  const filtered = items.filter(i => {
+    if (typeFilter !== 'all' && i.type !== typeFilter) return false
+    if (search && !i.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
+  async function saveMinQty(item: InventoryItem) {
     setSaving(true)
     const supabase = createClient()
-    await (supabase.from('stock_items') as any)
-      .update({ current_qty: Number(editQty) || 0, min_qty: Number(editMin) || 0, updated_at: new Date().toISOString() })
-      .eq('id', item.id)
+    await (supabase.from('stock_items') as any).upsert({
+      brand_id: brand,
+      ing_sku: item.sku,
+      ing_name: item.name,
+      unit: item.unit,
+      current_qty: item.current_qty,
+      min_qty: Number(editMin) || 0,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'brand_id,ing_sku' })
     setSaving(false)
-    setEditingId(null)
+    setEditingSku(null)
     onRefresh()
   }
 
   return (
     <div className="space-y-3">
-      {isAcct && (
-        <div className="flex justify-end">
-          <button
-            onClick={() => setAddOpen(v => !v)}
-            className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors"
-          >
-            + إضافة صنف
-          </button>
+      <div className="flex items-center gap-3 flex-wrap">
+        <input
+          type="text" placeholder="بحث..." value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500 w-44"
+        />
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {([['all', 'الكل'], ['ingredient', 'مواد خام'], ['batch', 'باتش']] as ['all' | 'ingredient' | 'batch', string][]).map(([v, l]) => (
+            <button key={v} onClick={() => setTypeFilter(v)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${typeFilter === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {l}
+            </button>
+          ))}
         </div>
-      )}
-      {addOpen && isAcct && (
-        <AddStockItemForm brand={brand} onSaved={() => { setAddOpen(false); onRefresh() }} />
-      )}
-      {items.length === 0 ? (
+        <span className="text-xs text-gray-400">{filtered.length} صنف</span>
+      </div>
+
+      {filtered.length === 0 ? (
         <div className="bg-white border border-gray-200 rounded-xl px-4 py-12 text-center text-gray-400 text-sm">
-          لا توجد أصناف في المخزون بعد
+          لا توجد أصناف
         </div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -206,36 +247,34 @@ function StockTab({
               </tr>
             </thead>
             <tbody>
-              {items.map(item => {
+              {filtered.map(item => {
                 const st = stockStatus(item)
-                const editing = editingId === item.id
+                const editing = editingSku === item.sku
                 return (
-                  <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                  <tr key={item.sku} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900">{item.ing_name}</div>
-                      <div className="text-xs text-gray-400 font-mono">{item.ing_sku}</div>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                          item.type === 'batch' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
+                        }`}>
+                          {item.type === 'batch' ? 'باتش' : 'خام'}
+                        </span>
+                        <div>
+                          <div className="font-medium text-gray-900">{item.name}</div>
+                          <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      {editing ? (
-                        <input
-                          type="number"
-                          value={editQty}
-                          onChange={e => setEditQty(e.target.value)}
-                          className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 text-xs text-gray-900 text-center"
-                        />
-                      ) : (
-                        <span className={`font-mono font-bold ${st === 'empty' ? 'text-red-600' : st === 'low' ? 'text-amber-600' : 'text-gray-900'}`}>
-                          {item.current_qty.toFixed(2)}
-                        </span>
-                      )}
+                      <span className={`font-mono font-bold ${st === 'empty' ? 'text-red-600' : st === 'low' ? 'text-amber-600' : 'text-gray-900'}`}>
+                        {item.current_qty.toFixed(2)}
+                      </span>
                       <span className="text-xs text-gray-400 mr-1">{item.unit}</span>
                     </td>
                     <td className="px-4 py-3 text-center">
                       {editing ? (
                         <input
-                          type="number"
-                          value={editMin}
-                          onChange={e => setEditMin(e.target.value)}
+                          type="number" value={editMin} onChange={e => setEditMin(e.target.value)}
                           className="w-20 bg-white border border-gray-300 rounded px-2 py-0.5 text-xs text-gray-900 text-center"
                         />
                       ) : (
@@ -251,23 +290,18 @@ function StockTab({
                       <td className="px-4 py-3 text-center">
                         {editing ? (
                           <div className="flex items-center gap-1 justify-center">
-                            <button
-                              onClick={() => saveEdit(item)}
-                              disabled={saving}
-                              className="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded"
-                            >
+                            <button onClick={() => saveMinQty(item)} disabled={saving}
+                              className="text-xs px-2 py-0.5 bg-blue-600 hover:bg-blue-500 text-white rounded">
                               {saving ? '...' : 'حفظ'}
                             </button>
-                            <button
-                              onClick={() => setEditingId(null)}
-                              className="text-xs px-2 py-0.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded"
-                            >
+                            <button onClick={() => setEditingSku(null)}
+                              className="text-xs px-2 py-0.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded">
                               إلغاء
                             </button>
                           </div>
                         ) : (
                           <button
-                            onClick={() => { setEditingId(item.id); setEditQty(String(item.current_qty)); setEditMin(String(item.min_qty)) }}
+                            onClick={() => { setEditingSku(item.sku); setEditMin(String(item.min_qty)) }}
                             className="text-xs text-gray-400 hover:text-gray-700 transition-colors"
                           >
                             ✏
@@ -286,174 +320,55 @@ function StockTab({
   )
 }
 
-// ── Add stock item form ───────────────────────────────────────────
-
-function AddStockItemForm({ brand, onSaved }: { brand: import('@/types').BrandId; onSaved: () => void }) {
-  const [search, setSearch] = useState('')
-  const [results, setResults] = useState<SearchItem[]>([])
-  const [selected, setSelected] = useState<SearchItem | null>(null)
-  const [minQty, setMinQty] = useState('0')
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState('')
-
-  useEffect(() => {
-    if (search.length < 2) { setResults([]); return }
-    const t = setTimeout(async () => {
-      const supabase = createClient()
-      const q = `%${search}%`
-
-      const [{ data: ings }, { data: batches }] = await Promise.all([
-        // Raw ingredients
-        (supabase.from('ingredients') as any)
-          .select('sku, name, unit')
-          .eq('brand_id', brand)
-          .ilike('name', q)
-          .limit(8),
-        // Batch / semi products
-        (supabase.from('products') as any)
-          .select('sku, name, unit')
-          .eq('brand_id', brand)
-          .or('is_semi.eq.true,category.eq.Batch')
-          .ilike('name', q)
-          .limit(8),
-      ])
-
-      const combined: SearchItem[] = [
-        ...((ings || []) as any[]).map((i: any) => ({ sku: i.sku, name: i.name, unit: i.unit ?? '—', type: 'ingredient' as const })),
-        ...((batches || []) as any[]).map((b: any) => ({ sku: b.sku, name: b.name, unit: b.unit ?? '—', type: 'batch' as const })),
-      ]
-      setResults(combined)
-    }, 250)
-    return () => clearTimeout(t)
-  }, [search, brand])
-
-  async function handleSave() {
-    if (!selected) return
-    setSaving(true); setErr('')
-    const supabase = createClient()
-    const { error } = await (supabase.from('stock_items') as any).upsert({
-      brand_id: brand,
-      ing_sku: selected.sku,
-      ing_name: selected.name,
-      unit: selected.unit,
-      current_qty: 0,
-      min_qty: Number(minQty) || 0,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'brand_id,ing_sku' })
-    setSaving(false)
-    if (error) { setErr(error.message); return }
-    onSaved()
-  }
-
-  return (
-    <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 space-y-3">
-      <div className="text-sm font-medium text-gray-900">إضافة صنف للمخزون</div>
-      <div className="text-xs text-gray-500">يمكن إضافة مواد خام أو باتشات</div>
-
-      <div className="relative">
-        <input
-          type="text"
-          placeholder="ابحث بالاسم (مادة خام أو باتش)..."
-          value={selected ? selected.name : search}
-          onChange={e => { setSearch(e.target.value); setSelected(null) }}
-          className="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
-        />
-        {results.length > 0 && !selected && (
-          <div className="absolute z-10 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
-            {results.map(item => (
-              <button
-                key={`${item.type}-${item.sku}`}
-                onClick={() => { setSelected(item); setSearch(''); setResults([]) }}
-                className="w-full text-right px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center justify-between gap-2"
-              >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
-                    item.type === 'batch'
-                      ? 'bg-orange-100 text-orange-700'
-                      : 'bg-green-100 text-green-700'
-                  }`}>
-                    {item.type === 'batch' ? 'باتش' : 'خام'}
-                  </span>
-                  <span className="truncate">{item.name}</span>
-                </div>
-                <span className="text-xs text-gray-400 font-mono flex-shrink-0">{item.unit}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {selected && (
-        <div className="flex items-center gap-2 text-xs">
-          <span className={`font-semibold px-2 py-0.5 rounded ${
-            selected.type === 'batch' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
-          }`}>
-            {selected.type === 'batch' ? 'باتش' : 'مادة خام'}
-          </span>
-          <span className="text-gray-500 font-mono">{selected.sku}</span>
-          <span className="text-gray-400">· {selected.unit}</span>
-        </div>
-      )}
-
-      <div className="flex items-center gap-3">
-        <label className="text-xs text-gray-500">الحد الأدنى</label>
-        <input
-          type="number"
-          value={minQty}
-          onChange={e => setMinQty(e.target.value)}
-          className="w-24 bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-        />
-        {selected && <span className="text-xs text-gray-400">{selected.unit}</span>}
-      </div>
-      {err && <p className="text-xs text-red-600">{err}</p>}
-      <button
-        onClick={handleSave}
-        disabled={!selected || saving}
-        className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg disabled:opacity-40 transition-colors"
-      >
-        {saving ? '...' : 'إضافة'}
-      </button>
-    </div>
-  )
-}
-
 // ── Tab 2: Add Movement ──────────────────────────────────────────
 
-function AddMovementTab({ stockItems, brand, onSaved }: {
-  stockItems: StockItem[]
+function AddMovementTab({ items, brand, onSaved }: {
+  items: InventoryItem[]
   brand: import('@/types').BrandId
   onSaved: () => void
 }) {
-  const [selectedSku, setSelectedSku] = useState('')
+  const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<InventoryItem | null>(null)
   const [movType, setMovType] = useState<MovementType>('in')
   const [qty, setQty] = useState('')
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
 
-  const selectedItem = stockItems.find(i => i.ing_sku === selectedSku)
+  const filtered = search.length >= 1
+    ? items.filter(i => i.name.toLowerCase().includes(search.toLowerCase())).slice(0, 10)
+    : []
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!selectedItem || !qty) return
+    if (!selected || !qty) return
     setSaving(true); setMsg(null)
     const numQty = Number(qty)
     if (isNaN(numQty) || numQty <= 0) {
       setMsg({ ok: false, text: 'الكمية يجب أن تكون أكبر من صفر' }); setSaving(false); return
     }
     const supabase = createClient()
-    const profile = (await supabase.auth.getUser()).data.user
+    const user = (await supabase.auth.getUser()).data.user
     const delta = movType === 'in' || movType === 'adjustment' ? numQty : -numQty
+    const newQty = Math.max(0, selected.current_qty + delta)
+
     const { error: movErr } = await (supabase.from('stock_movements') as any).insert({
-      brand_id: brand, ing_sku: selectedItem.ing_sku, ing_name: selectedItem.ing_name,
+      brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
       movement_type: movType, qty: numQty, note: note || null,
-      performed_by: profile?.id ?? null,
+      performed_by: user?.id ?? null,
     })
     if (movErr) { setMsg({ ok: false, text: movErr.message }); setSaving(false); return }
-    await (supabase.from('stock_items') as any)
-      .update({ current_qty: Math.max(0, selectedItem.current_qty + delta), updated_at: new Date().toISOString() })
-      .eq('id', selectedItem.id)
-    setMsg({ ok: true, text: 'تمت الإضافة ✓' }); setQty(''); setNote(''); setSaving(false); onSaved()
+
+    // Upsert stock_items — creates row automatically if it doesn't exist
+    await (supabase.from('stock_items') as any).upsert({
+      brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
+      unit: selected.unit, current_qty: newQty, min_qty: selected.min_qty,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'brand_id,ing_sku' })
+
+    setMsg({ ok: true, text: 'تمت الإضافة ✓' })
+    setQty(''); setNote(''); setSelected(null); setSearch('')
+    setSaving(false); onSaved()
   }
 
   return (
@@ -463,33 +378,58 @@ function AddMovementTab({ stockItems, brand, onSaved }: {
 
         <div className="space-y-1">
           <label className="text-xs text-gray-500">الصنف</label>
-          <select
-            value={selectedSku}
-            onChange={e => setSelectedSku(e.target.value)}
-            className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500"
-            required
-          >
-            <option value="">اختر صنفاً...</option>
-            {stockItems.map(i => (
-              <option key={i.ing_sku} value={i.ing_sku}>
-                {i.ing_name} ({i.current_qty.toFixed(2)} {i.unit})
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <input
+              type="text"
+              placeholder="ابحث بالاسم..."
+              value={selected ? selected.name : search}
+              onChange={e => { setSearch(e.target.value); setSelected(null) }}
+              className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
+            />
+            {filtered.length > 0 && !selected && (
+              <div className="absolute z-10 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+                {filtered.map(item => (
+                  <button
+                    key={item.sku} type="button"
+                    onClick={() => { setSelected(item); setSearch('') }}
+                    className="w-full text-right px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded flex-shrink-0 ${
+                        item.type === 'batch' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
+                      }`}>
+                        {item.type === 'batch' ? 'باتش' : 'خام'}
+                      </span>
+                      <span className="truncate">{item.name}</span>
+                    </div>
+                    <span className="text-xs text-gray-400 font-mono flex-shrink-0">
+                      {item.current_qty.toFixed(2)} {item.unit}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {selected && (
+            <div className="text-xs text-gray-500 flex items-center gap-2 mt-1">
+              <span className={`font-semibold px-1.5 py-0.5 rounded ${
+                selected.type === 'batch' ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
+              }`}>
+                {selected.type === 'batch' ? 'باتش' : 'خام'}
+              </span>
+              <span>الكمية الحالية: <span className="font-mono font-bold text-gray-800">{selected.current_qty.toFixed(2)} {selected.unit}</span></span>
+            </div>
+          )}
         </div>
 
         <div className="space-y-1">
           <label className="text-xs text-gray-500">نوع الحركة</label>
           <div className="grid grid-cols-4 gap-1">
             {(['in', 'out', 'waste', 'adjustment'] as MovementType[]).map(t => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setMovType(t)}
+              <button key={t} type="button" onClick={() => setMovType(t)}
                 className={`py-1.5 rounded-lg text-xs font-medium transition-colors ${
                   movType === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >
+                }`}>
                 {movementLabel(t)}
               </button>
             ))}
@@ -498,7 +438,7 @@ function AddMovementTab({ stockItems, brand, onSaved }: {
 
         <div className="space-y-1">
           <label className="text-xs text-gray-500">
-            الكمية{selectedItem && <span className="text-gray-400 mr-1">({selectedItem.unit})</span>}
+            الكمية{selected && <span className="text-gray-400 mr-1">({selected.unit})</span>}
           </label>
           <input
             type="number" step="0.001" min="0.001" value={qty}
@@ -509,8 +449,7 @@ function AddMovementTab({ stockItems, brand, onSaved }: {
 
         <div className="space-y-1">
           <label className="text-xs text-gray-500">ملاحظة (اختياري)</label>
-          <input
-            type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="سبب الحركة..."
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="سبب الحركة..."
             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -521,10 +460,8 @@ function AddMovementTab({ stockItems, brand, onSaved }: {
           </div>
         )}
 
-        <button
-          type="submit" disabled={saving || !selectedSku || !qty}
-          className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 transition-colors"
-        >
+        <button type="submit" disabled={saving || !selected || !qty}
+          className="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg disabled:opacity-40 transition-colors">
           {saving ? 'جارٍ الحفظ...' : 'تسجيل الحركة'}
         </button>
       </form>
@@ -547,19 +484,16 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3 flex-wrap">
-        <input
-          type="text" placeholder="بحث بالصنف..." value={search}
+        <input type="text" placeholder="بحث بالصنف..." value={search}
           onChange={e => setSearch(e.target.value)}
           className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500 w-44"
         />
         <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
           {(['all', 'in', 'out', 'waste', 'adjustment'] as (MovementType | 'all')[]).map(t => (
-            <button
-              key={t} onClick={() => setTypeFilter(t)}
+            <button key={t} onClick={() => setTypeFilter(t)}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
                 typeFilter === t ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
+              }`}>
               {t === 'all' ? 'الكل' : movementLabel(t as MovementType)}
             </button>
           ))}
@@ -587,27 +521,21 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
               {filtered.map(m => (
                 <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">
-                    {new Date(m.created_at).toLocaleDateString('ar-SA', { year: 'numeric', month: 'short', day: 'numeric' })}
-                    <div className="text-gray-400">
-                      {new Date(m.created_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}
-                    </div>
+                    {new Date(m.created_at).toLocaleDateString('ar-SA')}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="text-gray-900 font-medium">{m.ing_name}</div>
+                    <div className="font-medium text-gray-900">{m.ing_name}</div>
                     <div className="text-xs text-gray-400 font-mono">{m.ing_sku}</div>
                   </td>
                   <td className="px-4 py-3 text-center">
-                    <span className={`text-xs font-medium ${movementColor(m.movement_type)}`}>
+                    <span className={`text-xs font-semibold ${movementColor(m.movement_type)}`}>
                       {movementLabel(m.movement_type)}
                     </span>
                   </td>
-                  <td className={`px-4 py-3 text-center font-mono font-bold text-sm ${movementColor(m.movement_type)}`}>
-                    {m.movement_type === 'out' || m.movement_type === 'waste' ? '-' : '+'}
-                    {m.qty.toFixed(3)}
+                  <td className="px-4 py-3 text-center font-mono text-gray-700">
+                    {m.movement_type === 'out' || m.movement_type === 'waste' ? '-' : '+'}{m.qty}
                   </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">
-                    {m.note || <span className="text-gray-300">—</span>}
-                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500">{m.note ?? '—'}</td>
                 </tr>
               ))}
             </tbody>
