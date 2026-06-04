@@ -199,7 +199,7 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
                 <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                 <XAxis dataKey="name" tick={{ fontSize: 11 }} />
                 <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v: number) => [`${v.toFixed(0)} ر.س`]} />
+                <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
                 <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                   {barData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Bar>
@@ -213,7 +213,7 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
                 <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
                   {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                 </Pie>
-                <Tooltip formatter={(v: number) => [`${v.toFixed(0)} ر.س`]} />
+                <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
                 <Legend iconType="circle" iconSize={10} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
               </PieChart>
             </ResponsiveContainer>
@@ -455,7 +455,7 @@ function BreakevenReport({ brand, month }: { brand: string; month: string }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v: number) => [`${v.toFixed(2)} ر.س`]} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)} ر.س`]} />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                 {chartData.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
               </Bar>
@@ -538,7 +538,7 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
               <Pie data={data.supplierData} cx="50%" cy="50%" outerRadius={90} dataKey="value" nameKey="name">
                 {data.supplierData.map((_: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
               </Pie>
-              <Tooltip formatter={(v: number) => [`${v.toFixed(0)} ر.س`]} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
               <Legend iconType="circle" iconSize={10} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
             </PieChart>
           </ResponsiveContainer>
@@ -551,7 +551,7 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
               <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
               <XAxis dataKey="date" tick={{ fontSize: 10 }} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v: number) => [`${v.toFixed(0)} ر.س`]} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
               <Line type="monotone" dataKey="value" stroke="#ef4444" strokeWidth={2} dot={false} name="الإنفاق" />
             </LineChart>
           </ResponsiveContainer>
@@ -666,7 +666,7 @@ function SalesReport({ brand, month }: { brand: string; month: string }) {
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
             <XAxis dataKey="date" tick={{ fontSize: 10 }} />
             <YAxis tick={{ fontSize: 11 }} />
-            <Tooltip formatter={(v: number) => [`${v.toFixed(0)} ر.س`]} />
+            <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
             <Bar dataKey="revenue" fill="#10b981" radius={[4, 4, 0, 0]} name="الإيراد" />
           </BarChart>
         </ResponsiveContainer>

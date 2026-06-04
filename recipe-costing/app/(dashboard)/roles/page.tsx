@@ -475,8 +475,8 @@ export default function RolesPage() {
 
       {copySourceRole && (
         <CopyPermissionsModal
-          sourceRole={copySourceRole}
-          allRoles={roles}
+          sourceRbacRole={copySourceRole}
+          allRbacRoles={roles}
           supabase={supabase}
           onClose={() => setCopySourceRole(null)}
           onCopied={() => {

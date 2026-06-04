@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { RbacRbacRole } from '@/types'
+import type { RbacRole } from '@/types'
 
 interface Props {
   sourceRbacRole: RbacRole             // The role whose permissions we want to copy FROM

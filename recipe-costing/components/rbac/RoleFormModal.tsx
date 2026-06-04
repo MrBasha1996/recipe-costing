@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import type { RbacRbacRole } from '@/types'
+import type { RbacRole } from '@/types'
 
 interface Props {
   role: RbacRole | null          // null = create mode
