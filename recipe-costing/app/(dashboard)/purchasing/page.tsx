@@ -141,16 +141,18 @@ export default function PurchasingPage() {
       if (error) throw error
 
       if (updatePrices) {
-        const withSku = preview.filter(r => r.ing_sku && r.unit_cost > 0)
-        for (const r of withSku) {
-          await (supabase.from('ingredients') as any)
-            .update({ cost: r.unit_cost })
-            .eq('sku', r.ing_sku)
-            .eq('brand_id', brand as string)
-        }
+        const user = (await supabase.auth.getUser()).data.user
+        const res = await fetch('/api/purchases/apply', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brand_id: brand, import_batch: batchId, performed_by: user?.id }),
+        })
+        const data = await res.json()
+        const priceNote = data.updated > 0 ? ` · تحديث WAC لـ ${data.updated} صنف` : ''
+        setImportMsg({ ok: true, text: `تم استيراد ${rows.length} صنف بنجاح${priceNote}` })
+      } else {
+        setImportMsg({ ok: true, text: `تم استيراد ${rows.length} صنف بنجاح` })
       }
-
-      setImportMsg({ ok: true, text: `تم استيراد ${rows.length} صنف بنجاح${updatePrices ? ' وتحديث الأسعار' : ''}` })
       setPreview([])
       await loadHistory()
     } catch (err: any) {
