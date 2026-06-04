@@ -2,10 +2,13 @@ import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
 // Routes accessible by 'accountant' role only
-const ACCOUNTANT_ONLY = ['/users', '/dashboard', '/comparison', '/settings']
+const ACCOUNTANT_ONLY = ['/users', '/dashboard', '/comparison', '/settings', '/purchasing', '/costs']
 
 // Routes accessible by 'accountant' or 'ops'
-const ACCOUNTANT_OPS = ['/inventory']
+const ACCOUNTANT_OPS = ['/inventory', '/sales']
+
+// Routes accessible by 'accountant' or 'management'
+const ACCOUNTANT_MGMT = ['/reports']
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
@@ -43,7 +46,8 @@ export async function middleware(request: NextRequest) {
 
   const needsRoleCheck =
     ACCOUNTANT_ONLY.some(p => pathname.startsWith(p)) ||
-    ACCOUNTANT_OPS.some(p => pathname.startsWith(p))
+    ACCOUNTANT_OPS.some(p => pathname.startsWith(p)) ||
+    ACCOUNTANT_MGMT.some(p => pathname.startsWith(p))
 
   if (needsRoleCheck) {
     const { data: profile } = await supabase
@@ -52,13 +56,17 @@ export async function middleware(request: NextRequest) {
       .eq('id', user.id)
       .single()
 
-    const isAccountantOnly = ACCOUNTANT_ONLY.some(p => pathname.startsWith(p))
-    if (isAccountantOnly && profile?.role !== 'accountant') {
+    const role = profile?.role
+
+    if (ACCOUNTANT_ONLY.some(p => pathname.startsWith(p)) && role !== 'accountant') {
       return NextResponse.redirect(new URL('/costing', request.url))
     }
 
-    const isAccountantOps = ACCOUNTANT_OPS.some(p => pathname.startsWith(p))
-    if (isAccountantOps && profile?.role === 'kitchen') {
+    if (ACCOUNTANT_OPS.some(p => pathname.startsWith(p)) && role === 'kitchen') {
+      return NextResponse.redirect(new URL('/costing', request.url))
+    }
+
+    if (ACCOUNTANT_MGMT.some(p => pathname.startsWith(p)) && role !== 'accountant' && role !== 'management') {
       return NextResponse.redirect(new URL('/costing', request.url))
     }
   }

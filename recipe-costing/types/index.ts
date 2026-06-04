@@ -1,5 +1,5 @@
 export type BrandId = 'ti' | 'bb'
-export type Role = 'accountant' | 'ops' | 'kitchen'
+export type Role = 'accountant' | 'ops' | 'kitchen' | 'management'
 export type BrandAccess = 'ti' | 'bb' | 'all'
 export type ProductCategory = 'Meal' | 'Batch'
 export type ItemType = 'ingredient' | 'product'
@@ -159,6 +159,81 @@ export interface FoodCostResult {
   foodCostPct: number
   margin: number
   marginApp: number | null
+}
+
+// ── Operations ──────────────────────────────────────────────────
+
+export interface Purchase {
+  id: string
+  brand_id: BrandId
+  purchase_date: string
+  supplier_name: string
+  ing_sku: string | null
+  ing_name: string
+  qty: number
+  unit: string
+  total_price: number
+  unit_cost: number
+  import_batch: string
+  imported_by: string | null
+  created_at: string
+}
+
+export interface DailySale {
+  id: string
+  brand_id: BrandId
+  sale_date: string
+  product_sku: string
+  product_name: string
+  qty_sold: number
+  revenue: number
+  import_batch: string
+  imported_by: string | null
+  created_at: string
+}
+
+export interface LaborCost {
+  id: string
+  brand_id: BrandId
+  month: string
+  description: string
+  amount: number
+  created_by: string | null
+  created_at: string
+}
+
+export type OverheadCategory = 'rent' | 'electricity' | 'gas' | 'maintenance' | 'marketing' | 'other'
+
+export interface OverheadCost {
+  id: string
+  brand_id: BrandId
+  month: string
+  category: OverheadCategory
+  description: string
+  amount: number
+  created_by: string | null
+  created_at: string
+}
+
+// ── Excel import row types ────────────────────────────────────────
+
+export interface PurchaseRow {
+  purchase_date: string
+  supplier_name: string
+  ing_sku: string
+  ing_name: string
+  qty: number
+  unit: string
+  total_price: number
+  unit_cost: number
+}
+
+export interface SaleRow {
+  sale_date: string
+  product_sku: string
+  product_name: string
+  qty_sold: number
+  revenue: number
 }
 
 // ── Component search item (ingredient or semi-product) ──────────

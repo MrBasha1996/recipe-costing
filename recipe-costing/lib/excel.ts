@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { Recipe, Ingredient } from '@/types'
+import type { Recipe, Ingredient, PurchaseRow, SaleRow } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────
 
@@ -164,4 +164,139 @@ export function parsePriceFile(file: File): Promise<PriceChange[]> {
     }
     reader.readAsArrayBuffer(file)
   })
+}
+
+// ── Purchases Template ────────────────────────────────────────────
+
+export function downloadPurchasesTemplate(): void {
+  const wb = XLSX.utils.book_new()
+  const sample = [
+    {
+      'التاريخ (YYYY-MM-DD)': '2026-06-01',
+      'اسم المورد': 'شركة الأغذية',
+      'SKU المادة': 'sk-0001',
+      'اسم المادة': 'كبدة معلاق',
+      'الكمية': 10,
+      'الوحدة': 'كيلو',
+      'إجمالي الفاتورة (ريال)': 400,
+      'تكلفة/وحدة الوصفة (ريال)': 0.04,
+    },
+  ]
+  const ws = XLSX.utils.json_to_sheet(sample)
+  ws['!cols'] = [
+    { wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 25 },
+    { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 24 },
+  ]
+  XLSX.utils.book_append_sheet(wb, ws, 'المشتريات')
+  XLSX.writeFile(wb, 'قالب_المشتريات.xlsx')
+}
+
+export function parsePurchasesFile(file: File): Promise<PurchaseRow[]> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('فشل قراءة الملف'))
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target!.result as ArrayBuffer)
+        const wb = XLSX.read(data, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rows: any[] = XLSX.utils.sheet_to_json(ws)
+        const parsed: PurchaseRow[] = rows
+          .filter(r => r['اسم المادة'] && r['إجمالي الفاتورة (ريال)'])
+          .map(r => ({
+            purchase_date: String(r['التاريخ (YYYY-MM-DD)'] ?? '').trim(),
+            supplier_name: String(r['اسم المورد'] ?? '').trim(),
+            ing_sku: String(r['SKU المادة'] ?? '').trim(),
+            ing_name: String(r['اسم المادة'] ?? '').trim(),
+            qty: parseFloat(r['الكمية']) || 0,
+            unit: String(r['الوحدة'] ?? '').trim(),
+            total_price: parseFloat(r['إجمالي الفاتورة (ريال)']) || 0,
+            unit_cost: parseFloat(r['تكلفة/وحدة الوصفة (ريال)']) || 0,
+          }))
+          .filter(r => r.ing_name && r.total_price > 0)
+        resolve(parsed)
+      } catch (err: any) {
+        reject(new Error(`خطأ في تحليل الملف: ${err.message}`))
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+// ── Sales Template ────────────────────────────────────────────────
+
+export function downloadSalesTemplate(): void {
+  const wb = XLSX.utils.book_new()
+  const sample = [
+    {
+      'التاريخ (YYYY-MM-DD)': '2026-06-01',
+      'SKU المنتج': 'sk-0001',
+      'اسم المنتج': 'فول جره',
+      'الكمية المباعة': 25,
+      'الإيراد (ريال شامل VAT)': 375,
+    },
+  ]
+  const ws = XLSX.utils.json_to_sheet(sample)
+  ws['!cols'] = [{ wch: 18 }, { wch: 14 }, { wch: 30 }, { wch: 16 }, { wch: 22 }]
+  XLSX.utils.book_append_sheet(wb, ws, 'المبيعات')
+  XLSX.writeFile(wb, 'قالب_المبيعات.xlsx')
+}
+
+export function parseSalesFile(file: File): Promise<SaleRow[]> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error('فشل قراءة الملف'))
+    reader.onload = e => {
+      try {
+        const data = new Uint8Array(e.target!.result as ArrayBuffer)
+        const wb = XLSX.read(data, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rows: any[] = XLSX.utils.sheet_to_json(ws)
+        const parsed: SaleRow[] = rows
+          .filter(r => r['اسم المنتج'] && r['الإيراد (ريال شامل VAT)'])
+          .map(r => ({
+            sale_date: String(r['التاريخ (YYYY-MM-DD)'] ?? '').trim(),
+            product_sku: String(r['SKU المنتج'] ?? '').trim(),
+            product_name: String(r['اسم المنتج'] ?? '').trim(),
+            qty_sold: parseFloat(r['الكمية المباعة']) || 0,
+            revenue: parseFloat(r['الإيراد (ريال شامل VAT)']) || 0,
+          }))
+          .filter(r => r.product_name && r.revenue > 0)
+        resolve(parsed)
+      } catch (err: any) {
+        reject(new Error(`خطأ في تحليل الملف: ${err.message}`))
+      }
+    }
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+// ── P&L Export ───────────────────────────────────────────────────
+
+export function exportPLReport(data: {
+  month: string
+  brand: string
+  revenue: number
+  materialCost: number
+  laborCost: number
+  overheadCost: number
+  rows: { label: string; amount: number; pct?: number }[]
+}): void {
+  const wb = XLSX.utils.book_new()
+  const summaryRows = [
+    { 'البيان': 'الإيراد (قبل VAT)', 'المبلغ (ريال)': data.revenue, 'النسبة %': '100%' },
+    { 'البيان': 'تكلفة المواد الخام', 'المبلغ (ريال)': -data.materialCost, 'النسبة %': `${((data.materialCost / data.revenue) * 100).toFixed(1)}%` },
+    { 'البيان': 'تكاليف العمالة', 'المبلغ (ريال)': -data.laborCost, 'النسبة %': `${((data.laborCost / data.revenue) * 100).toFixed(1)}%` },
+    { 'البيان': 'التكاليف الثابتة', 'المبلغ (ريال)': -data.overheadCost, 'النسبة %': `${((data.overheadCost / data.revenue) * 100).toFixed(1)}%` },
+    { 'البيان': '─────────────', 'المبلغ (ريال)': '', 'النسبة %': '' },
+    {
+      'البيان': 'صافي الربح',
+      'المبلغ (ريال)': data.revenue - data.materialCost - data.laborCost - data.overheadCost,
+      'النسبة %': `${(((data.revenue - data.materialCost - data.laborCost - data.overheadCost) / data.revenue) * 100).toFixed(1)}%`,
+    },
+  ]
+  const ws = XLSX.utils.json_to_sheet(summaryRows)
+  ws['!cols'] = [{ wch: 28 }, { wch: 18 }, { wch: 12 }]
+  XLSX.utils.book_append_sheet(wb, ws, `P&L ${data.month}`)
+  XLSX.writeFile(wb, `تقرير_الأرباح_والخسائر_${data.month}_${data.brand}.xlsx`)
 }

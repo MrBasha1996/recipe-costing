@@ -13,6 +13,61 @@
   --color-muted:     #6b7280;
   --sidebar-width:   260px;
   --font-main:       'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+
+  /* Brand theme tokens (default = ti) */
+  --brand-sidebar-bg:      #0e1f2e;
+  --brand-sidebar-border:  #1a3a4a;
+  --brand-logo-from:       #1e4976;
+  --brand-logo-to:         #2563eb;
+  --brand-nav-hover-bg:    rgba(59,130,246,0.12);
+  --brand-nav-hover-text:  #93c5fd;
+  --brand-nav-active-bg:   rgba(59,130,246,0.22);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #3b82f6;
+  --brand-nav-text:        #8fafc8;
+  --brand-accent:          #3b82f6;
+  --brand-badge-bg:        rgba(59,130,246,0.15);
+  --brand-badge-text:      #93c5fd;
+  --brand-switcher-active: #2563eb;
+  --brand-header-accent:   #1e40af;
+}
+
+/* ── Three In (ti) ──────────────────────────────────────────── */
+[data-brand="ti"] {
+  --brand-sidebar-bg:      #0e1f2e;
+  --brand-sidebar-border:  #1a3a4a;
+  --brand-logo-from:       #1e4976;
+  --brand-logo-to:         #2563eb;
+  --brand-nav-hover-bg:    rgba(59,130,246,0.12);
+  --brand-nav-hover-text:  #93c5fd;
+  --brand-nav-active-bg:   rgba(59,130,246,0.22);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #60a5fa;
+  --brand-nav-text:        #8fafc8;
+  --brand-accent:          #3b82f6;
+  --brand-badge-bg:        rgba(59,130,246,0.18);
+  --brand-badge-text:      #93c5fd;
+  --brand-switcher-active: #1d4ed8;
+  --brand-header-accent:   #1e3a5f;
+}
+
+/* ── Bab Al Balad (bb) ──────────────────────────────────────── */
+[data-brand="bb"] {
+  --brand-sidebar-bg:      #1c0f00;
+  --brand-sidebar-border:  #3d1f00;
+  --brand-logo-from:       #92400e;
+  --brand-logo-to:         #d97706;
+  --brand-nav-hover-bg:    rgba(217,119,6,0.14);
+  --brand-nav-hover-text:  #fcd34d;
+  --brand-nav-active-bg:   rgba(217,119,6,0.25);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #f59e0b;
+  --brand-nav-text:        #b8965a;
+  --brand-accent:          #d97706;
+  --brand-badge-bg:        rgba(217,119,6,0.18);
+  --brand-badge-text:      #fcd34d;
+  --brand-switcher-active: #b45309;
+  --brand-header-accent:   #451a03;
 }
 
 body {
@@ -38,23 +93,23 @@ body {
   gap: 10px;
   padding: 9px 14px;
   border-radius: 8px;
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 500;
-  color: var(--color-muted);
-  transition: all 0.25s ease;
+  color: var(--brand-nav-text);
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
   border-right: 3px solid transparent;
   cursor: pointer;
   text-decoration: none;
 }
 .sidebar-nav-item:hover {
-  background: #eff6ff;
-  color: var(--color-primary);
+  background: var(--brand-nav-hover-bg);
+  color: var(--brand-nav-hover-text);
 }
 .sidebar-nav-item.active {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: var(--brand-nav-active-bg);
+  color: var(--brand-nav-active-text);
   font-weight: 600;
-  border-right-color: var(--color-primary);
+  border-right-color: var(--brand-nav-active-bar);
 }
 
 /* ── Stat card hover ─────────────────────────────────────── */

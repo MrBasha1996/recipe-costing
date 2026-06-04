@@ -11,6 +11,7 @@ interface Props {
   appPrice: number | null
   yieldPortions: number
   canEdit: boolean
+  canEditPrice: boolean
   onSellPriceChange: (v: number) => void
   onAppPriceChange: (v: number | null) => void
   onYieldChange: (v: number) => void
@@ -20,7 +21,7 @@ interface Props {
 export default function RecipeIdentityCard({
   product, diResult, doResult,
   sellPrice, appPrice, yieldPortions,
-  canEdit, onSellPriceChange, onAppPriceChange, onYieldChange,
+  canEdit, canEditPrice, onSellPriceChange, onAppPriceChange, onYieldChange,
   hasDoPackaging,
 }: Props) {
   const isBatch = product.is_semi
@@ -106,14 +107,14 @@ export default function RecipeIdentityCard({
               label="سعر البيع"
               value={sellPrice}
               onChange={v => onSellPriceChange(Number(v) || 0)}
-              disabled={!canEdit}
+              disabled={!canEditPrice}
               unit="ر.س"
             />
             <NumField
               label="سعر التطبيق"
               value={appPrice ?? ''}
               onChange={v => onAppPriceChange(v === '' ? null : Number(v) || null)}
-              disabled={!canEdit}
+              disabled={!canEditPrice}
               unit="ر.س"
               placeholder="—"
             />

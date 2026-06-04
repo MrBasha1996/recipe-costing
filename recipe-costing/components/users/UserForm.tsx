@@ -10,9 +10,10 @@ interface Props {
 }
 
 const ROLES: { value: Role; label: string }[] = [
-  { value: 'accountant', label: 'محاسب — صلاحية كاملة' },
-  { value: 'ops',        label: 'تشغيل — لا يرى الأسعار' },
-  { value: 'kitchen',    label: 'مطبخ — قراءة فقط' },
+  { value: 'accountant',  label: 'محاسب — صلاحية كاملة' },
+  { value: 'management',  label: 'إدارة عليا — يرى الأسعار ويعدّل سعر البيع فقط' },
+  { value: 'ops',         label: 'تشغيل — لا يرى الأسعار' },
+  { value: 'kitchen',     label: 'مطبخ — قراءة فقط' },
 ]
 
 const BRANDS: { value: BrandAccess; label: string }[] = [

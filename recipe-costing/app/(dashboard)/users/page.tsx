@@ -6,9 +6,10 @@ import UserForm from '@/components/users/UserForm'
 import type { UserProfile, AuditLog } from '@/types'
 
 const ROLE_LABELS: Record<string, string> = {
-  accountant: 'محاسب',
-  ops: 'تشغيل',
-  kitchen: 'مطبخ',
+  accountant:  'محاسب',
+  management:  'إدارة عليا',
+  ops:         'تشغيل',
+  kitchen:     'مطبخ',
 }
 
 const BRAND_LABELS: Record<string, string> = {
@@ -18,9 +19,10 @@ const BRAND_LABELS: Record<string, string> = {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  accountant: 'bg-blue-50 text-blue-700',
-  ops: 'bg-amber-50 text-amber-700',
-  kitchen: 'bg-purple-50 text-purple-700',
+  accountant:  'bg-blue-50 text-blue-700',
+  management:  'bg-emerald-50 text-emerald-700',
+  ops:         'bg-amber-50 text-amber-700',
+  kitchen:     'bg-purple-50 text-purple-700',
 }
 
 const ACTION_LABELS: Record<string, string> = {

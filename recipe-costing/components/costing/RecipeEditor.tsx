@@ -49,10 +49,11 @@ export default function RecipeEditor() {
     addRow, updateRow, removeRow,
     activeService, setActiveService,
   } = useCostingStore()
-  const { canSeePrices, canEdit, isAccountant, profile } = useUserStore()
+  const { canSeePrices, canEdit, isAccountant, isManagement, profile } = useUserStore()
   const canSeeP = canSeePrices()
   const canE = canEdit()
   const isAcct = isAccountant()
+  const isMgmt = isManagement()
 
   const [sellPrice, setSellPrice] = useState(0)
   const [appPrice, setAppPrice] = useState<number | null>(null)
@@ -488,6 +489,25 @@ export default function RecipeEditor() {
     }
   }
 
+  async function handleSavePriceOnly() {
+    if (!currentProduct) return
+    setSaving(true)
+    setSaveMsg(null)
+    try {
+      const supabase = createClient()
+      await (supabase.from('products') as any)
+        .update({ price: sellPrice, app_price: appPrice })
+        .eq('sku', currentProduct.sku)
+        .eq('brand_id', brand as string)
+      setSaveMsg({ ok: true, text: '✓ تم تحديث سعر البيع' })
+      setDirty(false)
+    } catch (e: any) {
+      setSaveMsg({ ok: false, text: `خطأ: ${e.message}` })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   function printService(mode: 'di' | 'do') {
     document.body.dataset.printMode = mode
     window.print()
@@ -522,8 +542,8 @@ export default function RecipeEditor() {
 
   const ingSkus = [...new Set(rows.map(r => r.ing_sku))]
 
-  // ── simplified view for ops / kitchen ────────────────────────
-  if (!isAcct) {
+  // ── simplified view for ops / kitchen (not management — they get full view) ──
+  if (!isAcct && !isMgmt) {
     return (
       <SimpleRecipeView
         productName={currentProduct.name}
@@ -890,6 +910,15 @@ export default function RecipeEditor() {
             >
               🖨 Dine Out
             </button>
+            {isMgmt && savedRecipe && (
+              <button
+                onClick={handleSavePriceOnly}
+                disabled={saving || !dirty}
+                className="text-xs px-4 py-1.5 rounded-lg transition-colors font-medium disabled:opacity-40 bg-emerald-600 hover:bg-emerald-500 text-white"
+              >
+                {saving ? '...' : '💾 حفظ السعر'}
+              </button>
+            )}
             {canEditRecipe && (
               <button
                 onClick={handleSave}
@@ -970,6 +999,7 @@ export default function RecipeEditor() {
             appPrice={appPrice}
             yieldPortions={yieldPortions}
             canEdit={canEditRecipe}
+            canEditPrice={canEditRecipe || isMgmt}
             onSellPriceChange={v => { setSellPrice(v); setDirty(true) }}
             onAppPriceChange={v => { setAppPrice(v); setDirty(true) }}
             onYieldChange={v => { setYieldPortions(v); setDirty(true) }}

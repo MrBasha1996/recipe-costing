@@ -8,13 +8,15 @@ interface UserStore {
   canSeePrices: () => boolean
   canEdit: () => boolean
   isAccountant: () => boolean
+  isManagement: () => boolean
 }
 
 export const useUserStore = create<UserStore>()((set, get) => ({
   profile: null,
   role: null,
   setProfile: (profile) => set({ profile, role: profile?.role ?? null }),
-  canSeePrices: () => get().role === 'accountant',
-  canEdit: () => get().role !== 'kitchen',
+  canSeePrices: () => get().role === 'accountant' || get().role === 'management',
+  canEdit: () => get().role !== 'kitchen' && get().role !== 'management',
   isAccountant: () => get().role === 'accountant',
+  isManagement: () => get().role === 'management',
 }))

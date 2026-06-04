@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
+import { useUserStore } from '@/stores/userStore'
 import { FC_TARGET } from '@/lib/calculations'
 import type { Product, Recipe } from '@/types'
 
@@ -15,10 +16,12 @@ type Filter = 'all' | 'saved' | 'unsaved'
 
 export default function CostingSidebar({ selectedSku, onSelect }: Props) {
   const { brand } = useBrandStore()
+  const { isManagement } = useUserStore()
+  const isMgmt = isManagement()
   const [products, setProducts] = useState<Product[]>([])
   const [recipes, setRecipes] = useState<Record<string, Recipe>>({})
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filter, setFilter] = useState<Filter>(isMgmt ? 'saved' : 'all')
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
@@ -38,7 +41,7 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
   useEffect(() => { load() }, [load])
 
   const meals = products.filter(p => p.category === 'Meal' && !p.is_semi)
-  const batches = products.filter(p => p.category === 'Batch' || p.is_semi)
+  const batches = isMgmt ? [] : products.filter(p => p.category === 'Batch' || p.is_semi)
 
   function applyFilter(items: Product[]) {
     let result = items
@@ -78,20 +81,22 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
           onChange={e => setSearch(e.target.value)}
           className="w-full bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-900 text-sm focus:outline-none focus:border-blue-500 placeholder-gray-400"
         />
-        {/* Filter tabs */}
-        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
-          {(['all', 'saved', 'unsaved'] as Filter[]).map(f => (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`flex-1 text-xs py-1 rounded-md transition-colors ${
-                filter === f ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {f === 'all' ? 'الكل' : f === 'saved' ? 'محفوظة' : 'غير محفوظة'}
-            </button>
-          ))}
-        </div>
+        {/* Filter tabs — hidden for management (always shows saved only) */}
+        {!isMgmt && (
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+            {(['all', 'saved', 'unsaved'] as Filter[]).map(f => (
+              <button
+                key={f}
+                onClick={() => setFilter(f)}
+                className={`flex-1 text-xs py-1 rounded-md transition-colors ${
+                  filter === f ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {f === 'all' ? 'الكل' : f === 'saved' ? 'محفوظة' : 'غير محفوظة'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* List */}
