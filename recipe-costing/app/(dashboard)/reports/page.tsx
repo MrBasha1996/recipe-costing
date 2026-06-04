@@ -8,9 +8,10 @@ import { exportPLReport } from '@/lib/excel'
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts'
 
-type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales'
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu'
 
 // ── Helpers ────────────────────────────────────────────────────────
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
@@ -44,6 +45,7 @@ export default function ReportsPage() {
     { key: 'breakeven', label: 'نقطة التعادل' },
     { key: 'purchases', label: 'تحليل المشتريات' },
     { key: 'sales',     label: 'تحليل المبيعات' },
+    { key: 'menu',      label: 'هندسة القائمة' },
   ]
 
   return (
@@ -72,8 +74,9 @@ export default function ReportsPage() {
       {tab === 'pl'        && <PLReport        brand={brand} month={month} />}
       {tab === 'fc'        && <FCReport         brand={brand} month={month} />}
       {tab === 'breakeven' && <BreakevenReport  brand={brand} month={month} />}
-      {tab === 'purchases' && <PurchasesReport  brand={brand} month={month} />}
-      {tab === 'sales'     && <SalesReport      brand={brand} month={month} />}
+      {tab === 'purchases' && <PurchasesReport     brand={brand} month={month} />}
+      {tab === 'sales'     && <SalesReport         brand={brand} month={month} />}
+      {tab === 'menu'      && <MenuEngineering     brand={brand} month={month} />}
     </div>
   )
 }
@@ -716,3 +719,176 @@ function SalesReport({ brand, month }: { brand: string; month: string }) {
     </div>
   )
 }
+
+// ── 6. Menu Engineering ────────────────────────────────────────────
+
+type MenuCategory = 'star' | 'plowhorse' | 'puzzle' | 'dog'
+
+interface MenuItem {
+  sku: string
+  name: string
+  qty: number
+  margin: number
+  marginPct: number
+  category: MenuCategory
+}
+
+const CATEGORY_CONFIG: Record<MenuCategory, { label: string; color: string; bg: string; desc: string }> = {
+  star:       { label: 'نجم ⭐',   color: '#16a34a', bg: '#f0fdf4', desc: 'ربحية عالية + إقبال عالٍ' },
+  plowhorse:  { label: 'حصان 🐎', color: '#d97706', bg: '#fffbeb', desc: 'ربحية منخفضة + إقبال عالٍ' },
+  puzzle:     { label: 'لغز ❓',   color: '#2563eb', bg: '#eff6ff', desc: 'ربحية عالية + إقبال منخفض' },
+  dog:        { label: 'كلب 🐕',   color: '#dc2626', bg: '#fef2f2', desc: 'ربحية منخفضة + إقبال منخفض' },
+}
+
+function MenuEngineering({ brand, month }: { brand: string; month: string }) {
+  const [items, setItems] = useState<MenuItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [avgQty, setAvgQty] = useState(0)
+  const [avgMarginPct, setAvgMarginPct] = useState(0)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const [{ data: sales }, { data: recipes }] = await Promise.all([
+      (supabase.from('daily_sales') as any)
+        .select('product_sku, product_name, qty_sold')
+        .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end),
+      (supabase.from('recipes') as any)
+        .select('sku, product_name, food_cost_pct, margin, sell_price, total_cost')
+        .eq('brand_id', brand).eq('is_active', true),
+    ])
+
+    const saleMap = new Map<string, { name: string; qty: number }>()
+    for (const s of (sales || []) as any[]) {
+      const ex = saleMap.get(s.product_sku)
+      if (ex) ex.qty += s.qty_sold
+      else saleMap.set(s.product_sku, { name: s.product_name, qty: s.qty_sold })
+    }
+
+    const recipeMap = new Map<string, any>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+
+    const raw: { qty: number; margin: number; marginPct: number; sku: string; name: string }[] = []
+    for (const [sku, sale] of saleMap) {
+      const r = recipeMap.get(sku)
+      if (!r) continue
+      raw.push({ sku, name: sale.name, qty: sale.qty, margin: r.margin, marginPct: r.food_cost_pct })
+    }
+
+    if (!raw.length) { setItems([]); setLoading(false); return }
+
+    const meanQty = raw.reduce((s, i) => s + i.qty, 0) / raw.length
+    const meanPct = raw.reduce((s, i) => s + i.marginPct, 0) / raw.length
+    setAvgQty(meanQty); setAvgMarginPct(meanPct)
+
+    const classified: MenuItem[] = raw.map(i => {
+      const hiQty = i.qty >= meanQty
+      const hiMargin = i.marginPct <= meanPct // lower FC% = better margin
+      const category: MenuCategory = hiQty && hiMargin ? 'star' : hiQty ? 'plowhorse' : hiMargin ? 'puzzle' : 'dog'
+      return { ...i, category }
+    })
+    classified.sort((a, b) => b.qty - a.qty)
+    setItems(classified); setLoading(false)
+  }, [brand, month])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="flex items-center justify-center h-48 text-gray-400 text-sm">جارٍ التحليل...</div>
+  if (!items.length) return <div className="flex items-center justify-center h-48 text-gray-400 text-sm">لا توجد بيانات مبيعات أو وصفات نشطة لهذا الشهر</div>
+
+  const counts = { star: 0, plowhorse: 0, puzzle: 0, dog: 0 }
+  items.forEach(i => counts[i.category]++)
+
+  const scatterData = items.map(i => ({ x: i.qty, y: i.marginPct, name: i.name, fill: CATEGORY_CONFIG[i.category].color }))
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">هندسة القائمة (Menu Engineering)</h2>
+        <p className="text-xs text-gray-500 mt-0.5">تحليل {items.length} منتج · المتوسطات: {Math.round(avgQty)} مبيعة · FC% {avgMarginPct.toFixed(1)}%</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {(Object.keys(CATEGORY_CONFIG) as MenuCategory[]).map(cat => (
+          <div key={cat} className="rounded-xl border p-4 text-center" style={{ background: CATEGORY_CONFIG[cat].bg, borderColor: CATEGORY_CONFIG[cat].color + '40' }}>
+            <div className="text-2xl font-bold" style={{ color: CATEGORY_CONFIG[cat].color }}>{counts[cat]}</div>
+            <div className="text-sm font-semibold mt-1" style={{ color: CATEGORY_CONFIG[cat].color }}>{CATEGORY_CONFIG[cat].label}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{CATEGORY_CONFIG[cat].desc}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="text-xs text-gray-500 mb-3">المحور الأفقي: الكمية المباعة · المحور الرأسي: FC% (أقل = أفضل)</div>
+        <ResponsiveContainer width="100%" height={320}>
+          <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="x" name="المبيعات" type="number" tick={{ fontSize: 11 }} label={{ value: 'الكمية المباعة', position: 'insideBottom', offset: -10, fontSize: 11 }} />
+            <YAxis dataKey="y" name="FC%" type="number" unit="%" tick={{ fontSize: 11 }} />
+            <ZAxis range={[60, 60]} />
+            <Tooltip content={({ payload }) => {
+              if (!payload?.length) return null
+              const d = payload[0]?.payload as any
+              return (
+                <div className="bg-white border border-gray-200 rounded-lg p-3 text-xs shadow-lg">
+                  <div className="font-semibold text-gray-900 mb-1">{d.name}</div>
+                  <div className="text-gray-600">مبيعات: <span className="font-mono font-bold">{d.x}</span></div>
+                  <div className="text-gray-600">FC%: <span className="font-mono font-bold">{d.y?.toFixed(1)}%</span></div>
+                </div>
+              )
+            }} />
+            <ReferenceLine x={avgQty} stroke="#94a3b8" strokeDasharray="4 4" />
+            <ReferenceLine y={avgMarginPct} stroke="#94a3b8" strokeDasharray="4 4" />
+            <Scatter data={scatterData} fill="#3b82f6">
+              {scatterData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+              <th className="text-right px-4 py-3 font-medium">المنتج</th>
+              <th className="px-4 py-3 font-medium text-center">المبيعات</th>
+              <th className="px-4 py-3 font-medium text-center">FC%</th>
+              <th className="px-4 py-3 font-medium text-center">هامش</th>
+              <th className="px-4 py-3 font-medium text-center">التصنيف</th>
+              <th className="px-4 py-3 font-medium text-right">التوصية</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, i) => {
+              const cfg = CATEGORY_CONFIG[item.category]
+              const rec = item.category === 'star' ? 'حافظ عليه وروّج له'
+                : item.category === 'plowhorse' ? 'أعد التسعير أو قلّل التكلفة'
+                : item.category === 'puzzle' ? 'روّج له أو غيّر مكانه في القائمة'
+                : 'راجع إبقاءه في القائمة'
+              return (
+                <tr key={item.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium text-gray-900">{item.name}</div>
+                    <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono font-bold text-gray-900">{item.qty.toLocaleString()}</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-semibold ${item.marginPct <= 35 ? 'text-green-600' : item.marginPct <= 45 ? 'text-amber-600' : 'text-red-600'}`}>
+                    {item.marginPct.toFixed(1)}%
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{item.margin.toFixed(2)} ر.س</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: cfg.color, background: cfg.bg }}>{cfg.label}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">{rec}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
