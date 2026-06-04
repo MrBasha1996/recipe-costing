@@ -50,11 +50,11 @@ export default function RecipeEditor() {
     addRow, updateRow, removeRow,
     activeService, setActiveService,
   } = useCostingStore()
-  const { canSeePrices, canEdit, isAccountant, isManagement, profile } = useUserStore()
+  const { canSeePrices, canEdit, profile } = useUserStore()
   const canSeeP = canSeePrices()
   const canE = canEdit()
-  const isAcct = isAccountant()
-  const isMgmt = isManagement()
+  const canApprove = canE
+  const isMgmt = canSeeP && !canE
 
   const [sellPrice, setSellPrice] = useState(0)
   const [appPrice, setAppPrice] = useState<number | null>(null)
@@ -558,8 +558,8 @@ export default function RecipeEditor() {
 
   const ingSkus = [...new Set(rows.map(r => r.ing_sku))]
 
-  // ── simplified view for ops / kitchen (not management — they get full view) ──
-  if (!isAcct && !isMgmt) {
+  // ── simplified view for users without price visibility ──
+  if (!canSeeP) {
     return (
       <SimpleRecipeView
         productName={currentProduct.name}
@@ -889,7 +889,7 @@ export default function RecipeEditor() {
             )}
 
             {/* Approve button — shown after save, accountant only, not yet approved */}
-            {isAcct && savedRecipe && !isApproved && !dirty && (
+            {canApprove && savedRecipe && !isApproved && !dirty && (
               <button
                 onClick={handleApprove}
                 disabled={approving || saving}
