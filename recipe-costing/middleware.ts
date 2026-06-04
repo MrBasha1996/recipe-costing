@@ -52,11 +52,21 @@ export async function middleware(request: NextRequest) {
   if (needsRoleCheck) {
     const { data: profile } = await supabase
       .from('user_profiles')
-      .select('role')
+      .select('role, role_id')
       .eq('id', user.id)
       .single()
 
     const role = profile?.role
+
+    if (profile?.role_id) {
+      const { data: rbacRole } = await supabase
+        .from('roles')
+        .select('is_super_admin')
+        .eq('id', profile.role_id)
+        .single()
+
+      if (rbacRole?.is_super_admin) return supabaseResponse
+    }
 
     if (ACCOUNTANT_ONLY.some(p => pathname.startsWith(p)) && role !== 'accountant') {
       return NextResponse.redirect(new URL('/costing', request.url))
