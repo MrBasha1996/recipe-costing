@@ -39,14 +39,25 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
         return
       }
 
-      // Fetch role permissions with module codes
+      // Fetch permissions and modules separately to avoid PostgREST join issues
       const { data: rp } = await (supabase.from('role_permissions') as any)
-        .select('can_view, can_create, can_update, can_delete, modules(code)')
+        .select('module_id, can_view, can_create, can_update, can_delete')
         .eq('role_id', profile.role_id)
+
+      const moduleIds = ((rp || []) as any[]).map((r: any) => r.module_id).filter(Boolean)
+
+      const { data: modules } = moduleIds.length > 0
+        ? await (supabase.from('modules') as any).select('id, code').in('id', moduleIds)
+        : { data: [] }
+
+      const moduleCodeMap: Record<string, string> = {}
+      for (const m of (modules || []) as any[]) {
+        moduleCodeMap[m.id] = m.code
+      }
 
       const map: PermissionsMap = {}
       for (const row of (rp || []) as any[]) {
-        const code = (row.modules as any)?.code
+        const code = moduleCodeMap[row.module_id]
         if (code) {
           map[code] = {
             can_view:   row.can_view,
@@ -71,7 +82,7 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
         })
         .subscribe()
     } catch {
-      set({ permissions: {}, isSuperAdmin: false, loaded: true })
+      set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: true })
     }
   },
 
