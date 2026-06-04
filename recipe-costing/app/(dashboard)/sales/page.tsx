@@ -137,7 +137,19 @@ export default function SalesPage() {
       }))
       const { error } = await (supabase.from('daily_sales') as any).insert(rows)
       if (error) throw error
-      setImportMsg({ ok: true, text: `تم استيراد ${rows.length} سجل بنجاح` })
+
+      // Recipe Explosion: deduct ingredients from stock automatically
+      const explodeRes = await fetch('/api/sales/explode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand_id: brand, import_batch: batchId }),
+      })
+      const explodeData = await explodeRes.json()
+      const explodeNote = explodeData.deducted
+        ? ` · خُصم ${explodeData.deducted} صنف من المخزون`
+        : ''
+
+      setImportMsg({ ok: true, text: `تم استيراد ${rows.length} سجل بنجاح${explodeNote}` })
       setSalesPreview([])
       setSourceType(null)
       await loadHistory()
