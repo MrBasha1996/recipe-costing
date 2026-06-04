@@ -130,7 +130,7 @@ export default function RolesPage() {
   // ── Permissions change with inheritance ───────────────────────
   function handlePermChange(moduleCode: string, action: PermissionAction, value: boolean) {
     setPermState(prev => {
-      const current = prev[moduleCode] ?? { can_view: false, can_create: false, can_update: false, can_delete: false }
+      const current = prev[moduleCode] ?? { can_view: false, can_create: false, can_update: false, can_delete: false, can_approve: false, can_import: false, can_edit_price: false }
       return { ...prev, [moduleCode]: applyInheritance(current, action, value) }
     })
     setPermsDirty(true)
@@ -143,12 +143,15 @@ export default function RolesPage() {
     try {
       const moduleMap = new Map(modules.map(m => [m.code, m.id]))
       const upsertRows = Object.entries(permState).map(([code, p]) => ({
-        role_id:    selectedRole.id,
-        module_id:  moduleMap.get(code),
-        can_view:   p.can_view,
-        can_create: p.can_create,
-        can_update: p.can_update,
-        can_delete: p.can_delete,
+        role_id:        selectedRole.id,
+        module_id:      moduleMap.get(code),
+        can_view:       p.can_view,
+        can_create:     p.can_create,
+        can_update:     p.can_update,
+        can_delete:     p.can_delete,
+        can_approve:    p.can_approve    ?? false,
+        can_import:     p.can_import     ?? false,
+        can_edit_price: p.can_edit_price ?? false,
       })).filter(r => r.module_id)
 
       const { error } = await (supabase.from('role_permissions') as any)

@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import { downloadPurchasesTemplate, parsePurchasesFile } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow } from '@/types'
@@ -21,6 +22,8 @@ interface BatchSummary {
 export default function PurchasingPage() {
   const { brand } = useBrandStore()
   const { profile } = useUserStore()
+  const { isSuperAdmin, hasPermission } = usePermissionsStore()
+  const canImport = isSuperAdmin || hasPermission('purchasing', 'import')
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -195,8 +198,8 @@ export default function PurchasingPage() {
 
       {/* Upload zone */}
       <div
-        onClick={() => fileRef.current?.click()}
-        className="border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-xl p-10 text-center cursor-pointer transition-colors bg-white"
+        onClick={() => canImport && fileRef.current?.click()}
+        className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors bg-white ${canImport ? 'border-gray-300 hover:border-blue-400 cursor-pointer' : 'border-gray-200 opacity-50 cursor-not-allowed'}`}
       >
         <div className="text-4xl mb-3">📂</div>
         <p className="text-gray-600 font-medium">اضغط لاختيار ملف</p>

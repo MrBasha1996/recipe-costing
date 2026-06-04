@@ -321,9 +321,12 @@ export interface RolePermission {
   can_create: boolean
   can_update: boolean
   can_delete: boolean
+  can_approve: boolean
+  can_import: boolean
+  can_edit_price: boolean
 }
 
-export type PermissionAction = 'view' | 'create' | 'update' | 'delete'
+export type PermissionAction = 'view' | 'create' | 'update' | 'delete' | 'approve' | 'import' | 'edit_price'
 
 export interface PermissionsMap {
   [moduleCode: string]: {
@@ -331,6 +334,9 @@ export interface PermissionsMap {
     can_create: boolean
     can_update: boolean
     can_delete: boolean
+    can_approve: boolean
+    can_import: boolean
+    can_edit_price: boolean
   }
 }
 

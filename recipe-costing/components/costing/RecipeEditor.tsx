@@ -6,6 +6,7 @@ import { qc, cacheKey } from '@/lib/queryCache'
 import { useCostingStore } from '@/stores/costingStore'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import { calcServiceCost, FC_TARGET } from '@/lib/calculations'
 import RecipeIdentityCard from '@/components/costing/RecipeIdentityCard'
 import RecipeCostBar from '@/components/costing/RecipeCostBar'
@@ -51,10 +52,11 @@ export default function RecipeEditor() {
     activeService, setActiveService,
   } = useCostingStore()
   const { canSeePrices, canEdit, profile } = useUserStore()
+  const { isSuperAdmin, hasPermission } = usePermissionsStore()
   const canSeeP = canSeePrices()
   const canE = canEdit()
-  const canApprove = canE
-  const isMgmt = canSeeP && !canE
+  const canApprove = isSuperAdmin || hasPermission('costing', 'approve')
+  const isMgmt = isSuperAdmin || hasPermission('costing', 'edit_price')
 
   const [sellPrice, setSellPrice] = useState(0)
   const [appPrice, setAppPrice] = useState<number | null>(null)

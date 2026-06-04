@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import { downloadSalesTemplate, parseSalesFile } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { SaleRow, FoodicsCancellationRow } from '@/types'
@@ -29,6 +30,8 @@ const WASTE_TYPE_LABEL: Record<string, string> = {
 export default function SalesPage() {
   const { brand } = useBrandStore()
   const { profile } = useUserStore()
+  const { isSuperAdmin, hasPermission } = usePermissionsStore()
+  const canImport = isSuperAdmin || hasPermission('sales', 'import')
   const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -232,8 +235,8 @@ export default function SalesPage() {
 
       {/* Upload zone */}
       <div
-        onClick={() => fileRef.current?.click()}
-        className="border-2 border-dashed border-gray-300 hover:border-green-400 rounded-xl p-10 text-center cursor-pointer transition-colors bg-white"
+        onClick={() => canImport && fileRef.current?.click()}
+        className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors bg-white ${canImport ? 'border-gray-300 hover:border-green-400 cursor-pointer' : 'border-gray-200 opacity-50 cursor-not-allowed'}`}
       >
         <div className="text-4xl mb-3">📊</div>
         <p className="text-gray-600 font-medium">اضغط لاختيار ملف</p>
