@@ -475,7 +475,7 @@ export default function RecipeEditor() {
       }
 
       const appFcPct = appPrice && appPrice > 0
-        ? (diResult.perPortionCost / appPrice) * 100
+        ? (diResult.perPortionCost / (appPrice / 1.15)) * 100
         : null
 
       await (supabase.from('audit_logs') as any).insert({

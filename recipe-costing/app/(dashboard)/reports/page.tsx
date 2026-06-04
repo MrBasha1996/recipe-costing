@@ -396,7 +396,7 @@ function BreakevenReport({ brand, month }: { brand: string; month: string }) {
     const avgVarCostPerCover = totalQty > 0 ? theoreticalMaterialCost / totalQty : 0
     const contributionMargin = avgRevenuePerCover - avgVarCostPerCover
     const breakevenCovers    = contributionMargin > 0 ? fixedCosts / contributionMargin : 0
-    const daysInMonth        = 30
+    const daysInMonth        = parseInt(monthEnd.slice(-2), 10)
     const breakevenPerDay    = breakevenCovers / daysInMonth
     const cmRatio            = avgRevenuePerCover > 0 ? (contributionMargin / avgRevenuePerCover) * 100 : 0
     const breakevenRevenue   = cmRatio > 0 ? (fixedCosts / cmRatio) * 100 : 0

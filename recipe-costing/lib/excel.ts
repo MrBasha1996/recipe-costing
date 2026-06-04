@@ -5,7 +5,62 @@ async function xlsx() {
   return _xlsx
 }
 
+import { z } from 'zod'
 import type { Recipe, Ingredient, PurchaseRow, SaleRow } from '@/types'
+
+// ── Zod Schemas ───────────────────────────────────────────────────
+
+const datePattern = /^\d{4}-\d{2}-\d{2}$/
+
+const PurchaseRowSchema = z.object({
+  purchase_date: z.string().regex(datePattern, 'تاريخ غير صالح (YYYY-MM-DD)'),
+  supplier_name: z.string().min(1, 'اسم المورد مطلوب'),
+  ing_name:      z.string().min(1, 'اسم المادة مطلوب'),
+  ing_sku:       z.string(),
+  qty:           z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
+  unit:          z.string().min(1, 'الوحدة مطلوبة'),
+  total_price:   z.number().positive('إجمالي الفاتورة يجب أن يكون أكبر من صفر'),
+  unit_cost:     z.number().nonnegative(),
+})
+
+const SaleRowSchema = z.object({
+  sale_date:    z.string().regex(datePattern, 'تاريخ غير صالح (YYYY-MM-DD)'),
+  product_sku:  z.string(),
+  product_name: z.string().min(1, 'اسم المنتج مطلوب'),
+  qty_sold:     z.number().positive('الكمية يجب أن تكون أكبر من صفر'),
+  revenue:      z.number().nonnegative('الإيراد لا يمكن أن يكون سالباً'),
+})
+
+/** Validates parsed rows and returns { valid, errors } */
+export function validatePurchaseRows(rows: PurchaseRow[]): { valid: PurchaseRow[]; errors: string[] } {
+  const valid: PurchaseRow[] = []
+  const errors: string[] = []
+  rows.forEach((row, i) => {
+    const result = PurchaseRowSchema.safeParse(row)
+    if (result.success) {
+      valid.push(row)
+    } else {
+      const msg = result.error.errors[0]?.message ?? 'خطأ غير معروف'
+      errors.push(`سطر ${i + 1} (${row.ing_name || '—'}): ${msg}`)
+    }
+  })
+  return { valid, errors }
+}
+
+export function validateSaleRows(rows: SaleRow[]): { valid: SaleRow[]; errors: string[] } {
+  const valid: SaleRow[] = []
+  const errors: string[] = []
+  rows.forEach((row, i) => {
+    const result = SaleRowSchema.safeParse(row)
+    if (result.success) {
+      valid.push(row)
+    } else {
+      const msg = result.error.errors[0]?.message ?? 'خطأ غير معروف'
+      errors.push(`سطر ${i + 1} (${row.product_name || '—'}): ${msg}`)
+    }
+  })
+  return { valid, errors }
+}
 
 // ── Types ─────────────────────────────────────────────────────────
 

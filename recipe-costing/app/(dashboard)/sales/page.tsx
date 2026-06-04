@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
-import { downloadSalesTemplate, parseSalesFile } from '@/lib/excel'
+import { downloadSalesTemplate, parseSalesFile, validateSaleRows } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { SaleRow, FoodicsCancellationRow } from '@/types'
 
@@ -99,8 +99,11 @@ export default function SalesPage() {
         // Fallback to standard Excel parser
         const rows = await parseSalesFile(file)
         if (rows.length === 0) { setParseError('لم يتم العثور على بيانات صالحة في الملف'); return }
+        const { valid: vRows, errors: vErrs } = validateSaleRows(rows)
+        if (vErrs.length) setParseError(`تحذير: ${vErrs.length} سطر بيانات غير صالحة — ${vErrs[0]}`)
+        if (vRows.length === 0) { setParseError('جميع الأسطر تحتوي على بيانات غير صالحة'); return }
         setSourceType('excel')
-        setSalesPreview(rows)
+        setSalesPreview(vRows)
       }
     } catch (err: any) {
       setParseError(err.message)

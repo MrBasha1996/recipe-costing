@@ -6,7 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
-import { downloadPurchasesTemplate, parsePurchasesFile } from '@/lib/excel'
+import { downloadPurchasesTemplate, parsePurchasesFile, validatePurchaseRows } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow } from '@/types'
 
@@ -103,12 +103,17 @@ export default function PurchasingPage() {
           }
           return r
         })
-        setPreview(rows)
+        const { valid: vRows, errors: vErrs } = validatePurchaseRows(rows)
+        if (vErrs.length) setParseError(`تحذير: ${vErrs.length} سطر بيانات غير صالحة — ${vErrs[0]}`)
+        setPreview(vRows)
       } else {
         // Fallback to standard Excel
         const rows = await parsePurchasesFile(file)
         if (rows.length === 0) { setParseError('لم يتم العثور على بيانات صالحة في الملف'); return }
-        setPreview(rows)
+        const { valid: vRows, errors: vErrs } = validatePurchaseRows(rows)
+        if (vErrs.length) setParseError(`تحذير: ${vErrs.length} سطر بيانات غير صالحة — ${vErrs[0]}`)
+        if (vRows.length === 0) { setParseError('جميع الأسطر تحتوي على بيانات غير صالحة'); return }
+        setPreview(vRows)
       }
     } catch (err: any) {
       setParseError(err.message)
