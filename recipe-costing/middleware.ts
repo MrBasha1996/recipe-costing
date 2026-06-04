@@ -1,18 +1,33 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Routes accessible by 'accountant' role only
-const ACCOUNTANT_ONLY = ['/users', '/roles', '/dashboard', '/comparison', '/settings', '/purchasing', '/costs']
+const PATH_TO_MODULE: Record<string, string> = {
+  '/dashboard':   'dashboard',
+  '/costing':     'costing',
+  '/products':    'products',
+  '/ingredients': 'ingredients',
+  '/purchasing':  'purchasing',
+  '/sales':       'sales',
+  '/waste':       'waste',
+  '/costs':       'costs',
+  '/reports':     'reports',
+  '/comparison':  'comparison',
+  '/inventory':   'inventory',
+  '/users':       'users',
+  '/roles':       'roles',
+  '/settings':    'settings',
+}
 
-// Routes accessible by 'accountant' or 'ops'
-const ACCOUNTANT_OPS = ['/inventory', '/sales', '/waste']
-
-// Routes accessible by 'accountant' or 'management'
-const ACCOUNTANT_MGMT = ['/reports']
+function getModuleForPath(pathname: string): string | null {
+  for (const [path, mod] of Object.entries(PATH_TO_MODULE)) {
+    if (pathname.startsWith(path)) return mod
+  }
+  return null
+}
 
 export async function middleware(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request })
-  
+
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
@@ -33,52 +48,37 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
-  // /login — redirect authenticated users away
   if (pathname.startsWith('/login')) {
     if (user) return NextResponse.redirect(new URL('/costing', request.url))
     return supabaseResponse
   }
 
-  // All other routes — must be authenticated
   if (!user) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  const needsRoleCheck =
-    ACCOUNTANT_ONLY.some(p => pathname.startsWith(p)) ||
-    ACCOUNTANT_OPS.some(p => pathname.startsWith(p)) ||
-    ACCOUNTANT_MGMT.some(p => pathname.startsWith(p))
+  const moduleCode = getModuleForPath(pathname)
+  if (!moduleCode) return supabaseResponse
 
-  if (needsRoleCheck) {
-    const { data: profile } = await supabase
-      .from('user_profiles')
-      .select('role, role_id')
-      .eq('id', user.id)
-      .single()
+  const { data: profile } = await (supabase.from('user_profiles') as any)
+    .select('role_id, roles(is_super_admin)')
+    .eq('id', user.id)
+    .single()
 
-    const role = profile?.role
+  if ((profile?.roles as any)?.is_super_admin) return supabaseResponse
 
-    if (profile?.role_id) {
-      const { data: rbacRole } = await supabase
-        .from('roles')
-        .select('is_super_admin')
-        .eq('id', profile.role_id)
-        .single()
+  if (!profile?.role_id) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
 
-      if (rbacRole?.is_super_admin) return supabaseResponse
-    }
+  const { data: perms } = await (supabase.from('role_permissions') as any)
+    .select('can_view, modules!inner(code)')
+    .eq('role_id', profile.role_id)
 
-    if (ACCOUNTANT_ONLY.some(p => pathname.startsWith(p)) && role !== 'accountant') {
-      return NextResponse.redirect(new URL('/costing', request.url))
-    }
+  const modulePerm = (perms as any[])?.find((p: any) => p.modules?.code === moduleCode)
 
-    if (ACCOUNTANT_OPS.some(p => pathname.startsWith(p)) && role === 'kitchen') {
-      return NextResponse.redirect(new URL('/costing', request.url))
-    }
-
-    if (ACCOUNTANT_MGMT.some(p => pathname.startsWith(p)) && role !== 'accountant' && role !== 'management') {
-      return NextResponse.redirect(new URL('/costing', request.url))
-    }
+  if (!modulePerm?.can_view) {
+    return NextResponse.redirect(new URL('/costing', request.url))
   }
 
   return supabaseResponse

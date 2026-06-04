@@ -13,24 +13,24 @@ export type Database = {
           id: string
           username: string
           name_ar: string
-          role: 'accountant' | 'ops' | 'kitchen'
           brand_access: 'ti' | 'bb' | 'all'
+          role_id: string | null
           created_at: string
         }
         Insert: {
           id: string
           username: string
           name_ar: string
-          role: 'accountant' | 'ops' | 'kitchen'
           brand_access: 'ti' | 'bb' | 'all'
+          role_id?: string | null
           created_at?: string
         }
         Update: {
           id?: string
           username?: string
           name_ar?: string
-          role?: 'accountant' | 'ops' | 'kitchen'
           brand_access?: 'ti' | 'bb' | 'all'
+          role_id?: string | null
           created_at?: string
         }
       }

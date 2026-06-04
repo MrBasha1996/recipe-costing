@@ -1,22 +1,30 @@
 import { create } from 'zustand'
-import type { UserProfile, Role } from '@/types'
+import type { UserProfile } from '@/types'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 
 interface UserStore {
   profile: UserProfile | null
   setProfile: (p: UserProfile | null) => void
-  role: Role | null
   canSeePrices: () => boolean
   canEdit: () => boolean
   isAccountant: () => boolean
   isManagement: () => boolean
 }
 
-export const useUserStore = create<UserStore>()((set, get) => ({
+export const useUserStore = create<UserStore>()((set) => ({
   profile: null,
-  role: null,
-  setProfile: (profile) => set({ profile, role: profile?.role ?? null }),
-  canSeePrices: () => get().role === 'accountant' || get().role === 'management',
-  canEdit: () => get().role !== 'kitchen' && get().role !== 'management',
-  isAccountant: () => get().role === 'accountant',
-  isManagement: () => get().role === 'management',
+  setProfile: (profile) => set({ profile }),
+  canSeePrices: () => {
+    const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
+    return isSuperAdmin || hasPermission('costs', 'view')
+  },
+  canEdit: () => {
+    const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
+    return isSuperAdmin || hasPermission('costing', 'update')
+  },
+  isAccountant: () => usePermissionsStore.getState().isSuperAdmin,
+  isManagement: () => {
+    const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
+    return !isSuperAdmin && hasPermission('reports', 'view')
+  },
 }))

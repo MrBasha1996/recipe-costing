@@ -1,5 +1,4 @@
 export type BrandId = 'ti' | 'bb'
-export type Role = 'accountant' | 'ops' | 'kitchen' | 'management'
 export type BrandAccess = 'ti' | 'bb' | 'all'
 export type ProductCategory = 'Meal' | 'Batch'
 export type ItemType = 'ingredient' | 'product'
@@ -14,9 +13,8 @@ export interface UserProfile {
   id: string
   username: string
   name_ar: string
-  role: Role
   brand_access: BrandAccess
-  role_id?: string | null  // FK to roles table (new RBAC system)
+  role_id?: string | null
   created_at: string
 }
 

@@ -5,6 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 interface PermissionsStore {
   permissions: PermissionsMap
   isSuperAdmin: boolean
+  roleName: string | null
   loaded: boolean
   loadPermissions: (userId: string, supabase: SupabaseClient) => Promise<void>
   hasPermission: (module: string, action: PermissionAction) => boolean
@@ -14,25 +15,27 @@ interface PermissionsStore {
 export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
   permissions: {},
   isSuperAdmin: false,
+  roleName: null,
   loaded: false,
 
   loadPermissions: async (userId: string, supabase: SupabaseClient) => {
     try {
       // Get user's role_id
       const { data: profile } = await (supabase.from('user_profiles') as any)
-        .select('role_id, roles(is_super_admin)')
+        .select('role_id, roles(is_super_admin, name)')
         .eq('id', userId)
         .single()
 
       if (!profile?.role_id) {
-        set({ permissions: {}, isSuperAdmin: false, loaded: true })
+        set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: true })
         return
       }
 
       const isSuperAdmin = (profile.roles as any)?.is_super_admin === true
+      const roleName: string | null = (profile.roles as any)?.name ?? null
 
       if (isSuperAdmin) {
-        set({ permissions: {}, isSuperAdmin: true, loaded: true })
+        set({ permissions: {}, isSuperAdmin: true, roleName, loaded: true })
         return
       }
 
@@ -54,7 +57,7 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
         }
       }
 
-      set({ permissions: map, isSuperAdmin: false, loaded: true })
+      set({ permissions: map, isSuperAdmin: false, roleName, loaded: true })
 
       // Realtime: reload if user's role_id changes
       ;(supabase.channel(`user_profile_${userId}`) as any)
@@ -85,5 +88,5 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
     }
   },
 
-  reset: () => set({ permissions: {}, isSuperAdmin: false, loaded: false }),
+  reset: () => set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: false }),
 }))

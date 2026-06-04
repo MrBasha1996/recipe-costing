@@ -11,28 +11,21 @@ import BrandSelectorOverlay from '@/components/BrandSelectorOverlay'
 import type { UserProfile, BrandId } from '@/types'
 
 const NAV_ITEMS = [
-  { key: 'costing',     icon: '📋', label: 'الوصفات',       href: '/costing',     roles: ['accountant','ops','kitchen','management'] },
-  { key: 'products',    icon: '🛍', label: 'المنتجات',      href: '/products',    roles: ['accountant','ops'] },
-  { key: 'ingredients', icon: '🥗', label: 'المواد الخام',  href: '/ingredients', roles: ['accountant','ops'] },
-  { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     href: '/purchasing',  roles: ['accountant'] },
-  { key: 'sales',       icon: '💰', label: 'المبيعات',      href: '/sales',       roles: ['accountant','ops'] },
-  { key: 'waste',       icon: '🗑', label: 'الهدر والفاقد', href: '/waste',       roles: ['accountant','ops'] },
-  { key: 'costs',       icon: '🏗', label: 'التكاليف',      href: '/costs',       roles: ['accountant'] },
-  { key: 'reports',     icon: '📊', label: 'التقارير',      href: '/reports',     roles: ['accountant','management'] },
-  { key: 'comparison',  icon: '↔️', label: 'مقارنة',        href: '/comparison',  roles: ['accountant'] },
-  { key: 'inventory',   icon: '📦', label: 'المخزون',       href: '/inventory',   roles: ['accountant','ops'] },
-  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   href: '/dashboard',   roles: ['accountant'] },
-  { key: 'users',       icon: '👥', label: 'المستخدمون',    href: '/users',       roles: ['accountant'] },
-  { key: 'roles',       icon: '🔐', label: 'المجموعات',     href: '/roles',       roles: ['accountant'] },
-  { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     href: '/settings',    roles: ['accountant'] },
+  { key: 'costing',     icon: '📋', label: 'الوصفات',       href: '/costing' },
+  { key: 'products',    icon: '🛍', label: 'المنتجات',      href: '/products' },
+  { key: 'ingredients', icon: '🥗', label: 'المواد الخام',  href: '/ingredients' },
+  { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     href: '/purchasing' },
+  { key: 'sales',       icon: '💰', label: 'المبيعات',      href: '/sales' },
+  { key: 'waste',       icon: '🗑', label: 'الهدر والفاقد', href: '/waste' },
+  { key: 'costs',       icon: '🏗', label: 'التكاليف',      href: '/costs' },
+  { key: 'reports',     icon: '📊', label: 'التقارير',      href: '/reports' },
+  { key: 'comparison',  icon: '↔️', label: 'مقارنة',        href: '/comparison' },
+  { key: 'inventory',   icon: '📦', label: 'المخزون',       href: '/inventory' },
+  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   href: '/dashboard' },
+  { key: 'users',       icon: '👥', label: 'المستخدمون',    href: '/users' },
+  { key: 'roles',       icon: '🔐', label: 'المجموعات',     href: '/roles' },
+  { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     href: '/settings' },
 ]
-
-const ROLE_LABEL: Record<string, string> = {
-  accountant:  'محاسب',
-  management:  'إدارة عليا',
-  ops:         'تشغيل',
-  kitchen:     'مطبخ',
-}
 
 const SIDEBAR_W = 260
 
@@ -85,21 +78,16 @@ export default function DashboardShell({
     router.push('/login')
   }
 
-  const { hasPermission, loaded: permLoaded } = usePermissionsStore()
+  const { hasPermission, loaded: permLoaded, roleName } = usePermissionsStore()
 
-  // When RBAC is loaded and user has a role_id → filter nav by RBAC view permissions
-  // Otherwise fall back to the old hardcoded role system
-  const visibleNav = NAV_ITEMS.filter(n => {
-    if (permLoaded && profile.role_id) {
-      return hasPermission(n.key, 'view')
-    }
-    return n.roles.includes(profile.role)
-  })
+  const visibleNav = permLoaded
+    ? NAV_ITEMS.filter(n => hasPermission(n.key, 'view'))
+    : []
 
   // Redirect to first accessible page if the current URL is not permitted
   // eslint-disable-next-line react-hooks/rules-of-hooks
   useEffect(() => {
-    if (!mounted || !permLoaded || !profile.role_id) return
+    if (!mounted || !permLoaded) return
     const match = NAV_ITEMS.find(n => n.href !== '/' && pathname.startsWith(n.href))
     if (match && !hasPermission(match.key, 'view')) {
       const first = NAV_ITEMS.find(n => hasPermission(n.key, 'view'))
@@ -246,7 +234,7 @@ export default function DashboardShell({
               </div>
               <div className="min-w-0">
                 <div className="text-sm font-medium truncate text-white">{profile.name_ar}</div>
-                <div className="text-xs" style={{ color: 'var(--brand-nav-text)' }}>{ROLE_LABEL[profile.role] ?? profile.role}</div>
+                <div className="text-xs" style={{ color: 'var(--brand-nav-text)' }}>{roleName ?? '—'}</div>
               </div>
             </div>
             <button

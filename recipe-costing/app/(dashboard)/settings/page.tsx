@@ -1,17 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import PeriodManager from '@/components/costing/PeriodManager'
 import { usePeriod } from '@/hooks/usePeriod'
 import { formatYearMonth } from '@/lib/period'
 
 export default function SettingsPage() {
-  const { isAccountant } = useUserStore()
+  const { hasPermission, isSuperAdmin } = usePermissionsStore()
   const [showPeriodManager, setShowPeriodManager] = useState(false)
   const { isCurrentClosed, currentYM, closedPeriods, reload } = usePeriod()
 
-  if (!isAccountant()) {
+  if (!isSuperAdmin && !hasPermission('settings', 'view')) {
     return (
       <div className="flex items-center justify-center h-48">
         <p className="text-gray-400 text-sm">غير مصرح لك بعرض هذه الصفحة</p>

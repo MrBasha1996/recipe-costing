@@ -5,24 +5,10 @@ import { createClient } from '@/lib/supabase/client'
 import UserForm from '@/components/users/UserForm'
 import type { UserProfile, AuditLog } from '@/types'
 
-const ROLE_LABELS: Record<string, string> = {
-  accountant:  'محاسب',
-  management:  'إدارة عليا',
-  ops:         'تشغيل',
-  kitchen:     'مطبخ',
-}
-
 const BRAND_LABELS: Record<string, string> = {
   all: 'الكل',
   ti: 'Three In',
   bb: 'باب البلد',
-}
-
-const ROLE_COLORS: Record<string, string> = {
-  accountant:  'bg-blue-50 text-blue-700',
-  management:  'bg-emerald-50 text-emerald-700',
-  ops:         'bg-amber-50 text-amber-700',
-  kitchen:     'bg-purple-50 text-purple-700',
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -48,9 +34,8 @@ export default function UsersPage() {
   const loadUsers = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const { data } = await supabase
-      .from('user_profiles')
-      .select('*')
+    const { data } = await (supabase.from('user_profiles') as any)
+      .select('*, roles(name)')
       .order('created_at', { ascending: false })
     setUsers((data as UserProfile[]) || [])
     setLoading(false)
@@ -178,8 +163,8 @@ export default function UsersPage() {
                       <div className="text-xs text-gray-500 font-mono mt-0.5">{u.username}</div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${ROLE_COLORS[u.role] ?? 'bg-gray-100 text-gray-600'}`}>
-                        {ROLE_LABELS[u.role] ?? u.role}
+                      <span className="text-xs px-2.5 py-1 rounded-full font-medium bg-gray-100 text-gray-600">
+                        {(u as any).roles?.name ?? '—'}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-center">
