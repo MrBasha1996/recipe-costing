@@ -11,7 +11,7 @@ import {
   ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts'
 
-type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu'
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance'
 
 // ── Helpers ────────────────────────────────────────────────────────
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
@@ -46,6 +46,7 @@ export default function ReportsPage() {
     { key: 'purchases', label: 'تحليل المشتريات' },
     { key: 'sales',     label: 'تحليل المبيعات' },
     { key: 'menu',      label: 'هندسة القائمة' },
+    { key: 'variance',  label: 'مقارنة FC%' },
   ]
 
   return (
@@ -77,6 +78,7 @@ export default function ReportsPage() {
       {tab === 'purchases' && <PurchasesReport     brand={brand} month={month} />}
       {tab === 'sales'     && <SalesReport         brand={brand} month={month} />}
       {tab === 'menu'      && <MenuEngineering     brand={brand} month={month} />}
+      {tab === 'variance'  && <VarianceReport      brand={brand} month={month} />}
     </div>
   )
 }
@@ -887,6 +889,165 @@ function MenuEngineering({ brand, month }: { brand: string; month: string }) {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+// ── 7. Variance Report: النظري vs الصافي vs POS ───────────────────
+
+function VarianceReport({ brand, month }: { brand: string; month: string }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [hasPosData, setHasPosData] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const { data: sales } = await (supabase.from('daily_sales') as any)
+      .select('product_sku, product_name, qty_sold, revenue, cost_pos, discount_amount, return_amount')
+      .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end)
+
+    if (!sales?.length) { setRows([]); setLoading(false); return }
+
+    const map = new Map<string, { name: string; qty: number; revenue: number; costPos: number; discount: number; returnAmt: number }>()
+    let anyPos = false
+    for (const s of sales as any[]) {
+      const ex = map.get(s.product_sku)
+      if (ex) {
+        ex.qty += s.qty_sold; ex.revenue += s.revenue
+        ex.costPos += s.cost_pos ?? 0; ex.discount += s.discount_amount ?? 0
+        ex.returnAmt += s.return_amount ?? 0
+      } else {
+        map.set(s.product_sku, { name: s.product_name, qty: s.qty_sold, revenue: s.revenue, costPos: s.cost_pos ?? 0, discount: s.discount_amount ?? 0, returnAmt: s.return_amount ?? 0 })
+      }
+      if ((s.cost_pos ?? 0) > 0) anyPos = true
+    }
+    setHasPosData(anyPos)
+
+    const skus = [...map.keys()]
+    const { data: recipes } = await (supabase.from('recipes') as any)
+      .select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+
+    const recipeMap = new Map<string, number>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r.total_cost / Math.max(r.yield_portions, 1))
+
+    const result = [...map.entries()].map(([sku, p]) => {
+      const cpUnit = recipeMap.get(sku) ?? null
+      const rev = p.revenue / 1.15
+      const netRev = Math.max(0, (p.revenue - p.discount - p.returnAmt) / 1.15)
+      const thCost = cpUnit != null ? cpUnit * p.qty : null
+      return {
+        sku, name: p.name, qty: p.qty,
+        rev, netRev, discount: p.discount, returnAmt: p.returnAmt,
+        costPos: p.costPos,
+        fcTh:  thCost != null && rev > 0 ? (thCost / rev) * 100 : null,
+        fcNet: thCost != null && netRev > 0 ? (thCost / netRev) * 100 : null,
+        fcPos: p.costPos > 0 && rev > 0 ? (p.costPos / rev) * 100 : null,
+      }
+    }).sort((a, b) => b.rev - a.rev)
+
+    setRows(result); setLoading(false)
+  }, [brand, month])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length) return <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات مبيعات لهذا الشهر</div>
+
+  const totalRev    = rows.reduce((s, r) => s + r.rev, 0)
+  const totalNetRev = rows.reduce((s, r) => s + r.netRev, 0)
+  const totalThCost = rows.reduce((s, r) => s + (r.fcTh != null ? (r.fcTh / 100) * r.rev : 0), 0)
+  const totalPos    = rows.reduce((s, r) => s + r.costPos, 0)
+  const totalDisc   = rows.reduce((s, r) => s + r.discount, 0)
+  const totalRet    = rows.reduce((s, r) => s + r.returnAmt, 0)
+
+  const avgTh  = totalRev > 0 ? (totalThCost / totalRev) * 100 : 0
+  const avgNet = totalNetRev > 0 ? (totalThCost / totalNetRev) * 100 : 0
+  const avgPos = hasPosData && totalRev > 0 ? (totalPos / totalRev) * 100 : null
+
+  const fc = (v: number | null) => v == null ? 'text-gray-300' : v <= 35 ? 'text-green-600' : v <= 45 ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">مقارنة FC% — النظري vs الصافي vs POS</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          الخصومات: {totalDisc.toFixed(0)} ر.س · المرتجعات: {totalRet.toFixed(0)} ر.س
+          {!hasPosData && ' · تكلفة POS غير متوفرة (تحتاج استيراد Foodics)'}
+        </p>
+      </div>
+
+      <div className={`grid gap-4 ${hasPosData ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="text-xs text-gray-500 mb-1">FC% نظري</div>
+          <div className={`text-2xl font-bold font-mono ${fc(avgTh)}`}>{avgTh.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-1">تكلفة الوصفة ÷ الإيراد الإجمالي</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="text-xs text-gray-500 mb-1">FC% صافي</div>
+          <div className={`text-2xl font-bold font-mono ${fc(avgNet)}`}>{avgNet.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-1">بعد خصم الخصومات والمرتجعات</div>
+        </div>
+        {hasPosData && (
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <div className="text-xs text-gray-500 mb-1">FC% من POS</div>
+            <div className={`text-2xl font-bold font-mono ${fc(avgPos)}`}>{avgPos?.toFixed(1)}%</div>
+            <div className="text-xs text-gray-400 mt-1">تكلفة Foodics المباشرة</div>
+          </div>
+        )}
+      </div>
+
+      {hasPosData && avgPos != null && (
+        <div className={`rounded-xl px-4 py-3 text-sm border flex items-center gap-2 ${Math.abs(avgPos - avgTh) > 3 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
+          <span>{Math.abs(avgPos - avgTh) > 3 ? '⚠️' : '✅'}</span>
+          <span>الفرق بين FC% النظري والـ POS: <strong>{(avgPos - avgTh).toFixed(1)}%</strong>
+            {Math.abs(avgPos - avgTh) > 3 ? ' — فجوة تستحق المراجعة (هدر غير مسجّل أو خطأ في التكاليف)' : ' — الفرق ضمن الحدود المقبولة'}
+          </span>
+        </div>
+      )}
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                <th className="px-4 py-3 font-medium text-center">الكمية</th>
+                <th className="px-4 py-3 font-medium text-center">الإيراد</th>
+                <th className="px-4 py-3 font-medium text-center bg-blue-50 text-blue-700">FC% نظري</th>
+                <th className="px-4 py-3 font-medium text-center bg-amber-50 text-amber-700">FC% صافي</th>
+                {hasPosData && <th className="px-4 py-3 font-medium text-center bg-green-50 text-green-700">FC% POS</th>}
+                {hasPosData && <th className="px-4 py-3 font-medium text-center">الفرق</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const diff = r.fcPos != null && r.fcTh != null ? r.fcPos - r.fcTh : null
+                return (
+                  <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900">{r.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{r.sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.rev.toFixed(0)}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcTh)}`}>{r.fcTh != null ? `${r.fcTh.toFixed(1)}%` : <span className="text-gray-300 text-xs">لا وصفة</span>}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcNet)}`}>{r.fcNet != null ? `${r.fcNet.toFixed(1)}%` : '—'}</td>
+                    {hasPosData && <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcPos)}`}>{r.fcPos != null ? `${r.fcPos.toFixed(1)}%` : <span className="text-gray-300 text-xs">—</span>}</td>}
+                    {hasPosData && (
+                      <td className={`px-4 py-2.5 text-center font-mono font-semibold text-sm ${diff == null ? 'text-gray-300' : Math.abs(diff) > 3 ? (diff > 0 ? 'text-red-600' : 'text-green-600') : 'text-gray-500'}`}>
+                        {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%` : '—'}
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   )
