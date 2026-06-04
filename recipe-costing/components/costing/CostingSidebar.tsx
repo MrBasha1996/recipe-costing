@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { FC_TARGET } from '@/lib/calculations'
+import { qc, cacheKey } from '@/lib/queryCache'
 import type { Product, Recipe } from '@/types'
 
 interface Props {
@@ -24,16 +25,39 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
   const [filter, setFilter] = useState<Filter>(isMgmt ? 'saved' : 'all')
   const [loading, setLoading] = useState(true)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
+    const pk = cacheKey.products(brand)
+    const rk = cacheKey.recipes(brand)
+
+    // Return cached data immediately — no spinner for repeat visits
+    const cachedProds = !force && qc.get<Product[]>(pk)
+    const cachedRecs  = !force && qc.get<Recipe[]>(rk)
+
+    if (cachedProds && cachedRecs) {
+      setProducts(cachedProds)
+      const recMap: Record<string, Recipe> = {}
+      cachedRecs.forEach(r => { recMap[r.sku] = r })
+      setRecipes(recMap)
+      setLoading(false)
+      return
+    }
+
     setLoading(true)
     const supabase = createClient()
     const [{ data: prods }, { data: recs }] = await Promise.all([
       supabase.from('products').select('*').eq('brand_id', brand).order('name'),
       supabase.from('recipes').select('*').eq('brand_id', brand),
     ])
-    setProducts((prods as Product[]) || [])
+
+    const products = (prods as Product[]) || []
+    const recipes  = (recs  as Recipe[])  || []
+
+    qc.set(pk, products)
+    qc.set(rk, recipes)
+
+    setProducts(products)
     const recMap: Record<string, Recipe> = {}
-    ;((recs as Recipe[]) || []).forEach(r => { recMap[r.sku] = r })
+    recipes.forEach(r => { recMap[r.sku] = r })
     setRecipes(recMap)
     setLoading(false)
   }, [brand])

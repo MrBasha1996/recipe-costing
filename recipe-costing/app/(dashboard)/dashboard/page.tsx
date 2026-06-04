@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { FC_TARGET } from '@/lib/calculations'
+import { qc, cacheKey } from '@/lib/queryCache'
 import KPICards from '@/components/dashboard/KPICards'
 import FCDistributionChart from '@/components/dashboard/FCDistributionChart'
 import Top10Chart from '@/components/dashboard/Top10Chart'
@@ -18,13 +19,19 @@ export default function DashboardPage() {
   const [exporting, setExporting] = useState(false)
 
   const load = useCallback(async () => {
+    const rk = cacheKey.recipes(brand)
+    const cached = qc.get<Recipe[]>(rk)
+    if (cached) { setRecipes(cached); setLoading(false); return }
+
     setLoading(true)
     const supabase = createClient()
     const { data } = await (supabase.from('recipes') as any)
       .select('*')
       .eq('brand_id', brand as string)
       .order('food_cost_pct', { ascending: false })
-    setRecipes((data as Recipe[]) || [])
+    const recipes = (data as Recipe[]) || []
+    qc.set(rk, recipes)
+    setRecipes(recipes)
     setLoading(false)
   }, [brand])
 
@@ -61,7 +68,7 @@ export default function DashboardPage() {
           : 0,
       }))
 
-      exportRecipesExcel(recipes, ingExport, (history as any[]) || [])
+      await exportRecipesExcel(recipes, ingExport, (history as any[]) || [])
     } finally {
       setExporting(false)
     }

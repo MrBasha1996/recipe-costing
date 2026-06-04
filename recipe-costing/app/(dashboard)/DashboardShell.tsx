@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { key: 'ingredients', icon: '🥗', label: 'المواد الخام',  href: '/ingredients', roles: ['accountant','ops'] },
   { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     href: '/purchasing',  roles: ['accountant'] },
   { key: 'sales',       icon: '💰', label: 'المبيعات',      href: '/sales',       roles: ['accountant','ops'] },
+  { key: 'waste',       icon: '🗑', label: 'الهدر والفاقد', href: '/waste',       roles: ['accountant','ops'] },
   { key: 'costs',       icon: '🏗', label: 'التكاليف',      href: '/costs',       roles: ['accountant'] },
   { key: 'reports',     icon: '📊', label: 'التقارير',      href: '/reports',     roles: ['accountant','management'] },
   { key: 'comparison',  icon: '↔️', label: 'مقارنة',        href: '/comparison',  roles: ['accountant'] },

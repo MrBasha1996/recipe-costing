@@ -104,7 +104,7 @@ export default function IngredientsPage() {
           {isAccountant() && (
             <>
               <button
-                onClick={() => downloadPriceTemplate(ingredients)}
+                onClick={() => downloadPriceTemplate(ingredients).catch(console.error)}
                 disabled={ingredients.length === 0}
                 className="text-sm px-3 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 text-gray-700 rounded-lg transition-colors"
                 title="تحميل قالب Excel لتحديث الأسعار"

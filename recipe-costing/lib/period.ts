@@ -10,6 +10,19 @@ export function formatYearMonth(ym: string): string {
   })
 }
 
+/**
+ * Returns the valid date range for a given YYYY-MM month.
+ * Handles months with 28/29/30/31 days correctly.
+ */
+export function monthRange(month: string): { start: string; end: string } {
+  const [year, m] = month.split('-').map(Number)
+  const lastDay = new Date(year, m, 0).getDate() // day 0 of next month = last day of this month
+  return {
+    start: `${month}-01`,
+    end:   `${month}-${String(lastDay).padStart(2, '0')}`,
+  }
+}
+
 /** Returns last N year-month strings, newest first */
 export function lastNMonths(n: number): string[] {
   const result: string[] = []

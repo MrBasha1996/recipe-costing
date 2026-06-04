@@ -215,6 +215,33 @@ export interface OverheadCost {
   created_at: string
 }
 
+export interface Branch {
+  id: string
+  brand_id: BrandId
+  name: string
+  ref: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface WasteLog {
+  id: string
+  brand_id: BrandId
+  branch_name: string | null
+  branch_ref: string | null
+  log_date: string
+  product_sku: string | null
+  product_name: string
+  qty: number
+  value: number
+  waste_type: 'cancellation' | 'return' | 'spoilage' | 'expiry' | 'other'
+  reason: string | null
+  order_ref: string | null
+  was_wasted: boolean
+  import_batch: string | null
+  created_at: string
+}
+
 // ── Excel import row types ────────────────────────────────────────
 
 export interface PurchaseRow {
@@ -234,6 +261,28 @@ export interface SaleRow {
   product_name: string
   qty_sold: number
   revenue: number
+  branch_name?: string
+  branch_ref?: string
+  tax_amount?: number
+  discount_amount?: number
+  return_amount?: number
+  return_qty?: number
+  cancel_amount?: number
+  cancel_qty?: number
+  cost_pos?: number
+  source?: 'excel' | 'foodics'
+}
+
+export interface FoodicsCancellationRow {
+  product_name: string
+  branch_name: string
+  branch_ref: string
+  waste_type: 'cancellation' | 'return'
+  order_ref: string
+  qty: number
+  value: number
+  reason: string
+  was_wasted: boolean
 }
 
 // ── Component search item (ingredient or semi-product) ──────────

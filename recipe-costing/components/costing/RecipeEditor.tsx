@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { qc, cacheKey } from '@/lib/queryCache'
 import { useCostingStore } from '@/stores/costingStore'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
@@ -152,28 +153,40 @@ export default function RecipeEditor() {
           service_type: r.service_type ?? 'both',
         }))
 
-      // ── Refresh costs from source tables ──────────────────────
+      // ── Refresh costs — run both lookups in parallel ──────────
       const rmSkus = [...new Set(draftRows.filter(r => !r.is_semi).map(r => r.ing_sku))]
       const btSkus = [...new Set(draftRows.filter(r =>  r.is_semi).map(r => r.ing_sku))]
       const priceMap = new Map<string, number>()
 
-      if (rmSkus.length > 0) {
-        const { data: ings } = await (supabase.from('ingredients') as any)
-          .select('sku, cost')
-          .eq('brand_id', brand as string)
-          .in('sku', rmSkus)
-        for (const ing of (ings || []) as any[]) priceMap.set(ing.sku, ing.cost)
-      }
+      // Check cache for ingredient prices first
+      const cachedPrices = qc.get<Record<string, number>>(cacheKey.ingPrices(brand as string))
 
-      if (btSkus.length > 0) {
-        const { data: btRecs } = await (supabase.from('recipes') as any)
-          .select('sku, total_cost, yield_portions')
-          .eq('brand_id', brand as string)
-          .eq('is_active', true)
-          .in('sku', btSkus)
-        for (const r of (btRecs || []) as any[]) {
-          if (r.yield_portions > 0) priceMap.set(r.sku, r.total_cost / r.yield_portions)
+      if (cachedPrices) {
+        for (const [sku, cost] of Object.entries(cachedPrices)) priceMap.set(sku, cost)
+      } else {
+        // Fetch ingredients and batch costs in parallel
+        const [ingResult, btResult] = await Promise.all([
+          rmSkus.length > 0
+            ? (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand as string).in('sku', rmSkus)
+            : Promise.resolve({ data: [] }),
+          btSkus.length > 0
+            ? (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand as string).eq('is_active', true).in('sku', btSkus)
+            : Promise.resolve({ data: [] }),
+        ])
+
+        const priceSnapshot: Record<string, number> = {}
+        for (const ing of (ingResult.data || []) as any[]) {
+          priceMap.set(ing.sku, ing.cost)
+          priceSnapshot[ing.sku] = ing.cost
         }
+        for (const r of (btResult.data || []) as any[]) {
+          if (r.yield_portions > 0) {
+            const cost = r.total_cost / r.yield_portions
+            priceMap.set(r.sku, cost)
+            priceSnapshot[r.sku] = cost
+          }
+        }
+        qc.set(cacheKey.ingPrices(brand as string), priceSnapshot)
       }
 
       const updatedRows = draftRows.map(r => {
@@ -208,7 +221,7 @@ export default function RecipeEditor() {
     }
   }, [currentProduct, brand, setSavedRecipe, setRows])
 
-  useEffect(() => { loadRecipe(); loadVersions() }, [loadRecipe, loadVersions])
+  useEffect(() => { Promise.all([loadRecipe(), loadVersions()]) }, [loadRecipe, loadVersions])
 
   // ── calculations ──────────────────────────────────────────────
   const diResult = useMemo(
@@ -479,6 +492,9 @@ export default function RecipeEditor() {
       })
 
       setSavedRecipe(saved as Recipe)
+      // Invalidate cached recipes list so sidebar + dashboard reflect the new save
+      qc.bustPrefix(cacheKey.recipes(brand as string))
+      qc.bustPrefix(cacheKey.ingPrices(brand as string))
       await loadVersions()
       setSaveMsg({ ok: true, text: 'تم الحفظ ✓' })
       setDirty(false)

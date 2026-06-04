@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
-import { getCurrentYearMonth, lastNMonths, formatYearMonth } from '@/lib/period'
+import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange } from '@/lib/period'
 import { exportPLReport } from '@/lib/excel'
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -86,8 +86,7 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const monthStart = `${month}-01`
-    const monthEnd   = `${month}-31`
+    const { start: monthStart, end: monthEnd } = monthRange(month)
 
     const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }] = await Promise.all([
       (supabase.from('daily_sales') as any).select('revenue').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd),
@@ -142,10 +141,10 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
     <div className="space-y-6">
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard label="الإيراد (قبل VAT)" value={`${r.toLocaleString('ar-SA', { maximumFractionDigits: 0 })} ر.س`} sub={`VAT: ${data.vat.toFixed(0)} ر.س`} color="text-blue-700" />
-        <KpiCard label="إجمالي التكاليف" value={`${data.totalCost.toLocaleString('ar-SA', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.totalCost)} color="text-red-600" />
-        <KpiCard label="مجمل الربح (Gross)" value={`${data.grossProfit.toLocaleString('ar-SA', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.grossProfit)} color={data.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'} />
-        <KpiCard label="صافي الربح (Net)" value={`${data.netProfit.toLocaleString('ar-SA', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.netProfit)} color={data.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700'} />
+        <KpiCard label="الإيراد (قبل VAT)" value={`${r.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={`VAT: ${data.vat.toFixed(0)} ر.س`} color="text-blue-700" />
+        <KpiCard label="إجمالي التكاليف" value={`${data.totalCost.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.totalCost)} color="text-red-600" />
+        <KpiCard label="مجمل الربح (Gross)" value={`${data.grossProfit.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.grossProfit)} color={data.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'} />
+        <KpiCard label="صافي الربح (Net)" value={`${data.netProfit.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.netProfit)} color={data.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700'} />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -154,7 +153,7 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
           <div className="px-5 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
             <span className="font-semibold text-gray-900">بيان الأرباح والخسائر — {formatYearMonth(month)}</span>
             <button
-              onClick={() => exportPLReport({ month, brand, revenue: r, materialCost: data.materialCost, laborCost: data.laborCost, overheadCost: data.overheadCost, rows: [] })}
+              onClick={() => exportPLReport({ month, brand, revenue: r, materialCost: data.materialCost, laborCost: data.laborCost, overheadCost: data.overheadCost, rows: [] }).catch(console.error)}
               className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600"
             >
               ⬇ Excel
@@ -180,7 +179,7 @@ function PLReport({ brand, month }: { brand: string; month: string }) {
                 <tr key={i} className={`${row.bold ? 'bg-gray-50' : ''} border-b border-gray-100`}>
                   <td className={`px-4 py-3 ${row.bold ? 'font-semibold' : ''} text-gray-700`}>{row.label}</td>
                   <td className={`px-4 py-3 text-left font-mono ${row.bold ? 'font-bold text-base' : ''} ${row.color ?? 'text-gray-800'}`}>
-                    {row.value != null ? `${row.value >= 0 ? '' : ''}${Math.abs(row.value).toLocaleString('ar-SA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س` : row.pct ?? ''}
+                    {row.value != null ? `${row.value >= 0 ? '' : ''}${Math.abs(row.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س` : row.pct ?? ''}
                   </td>
                   <td className="px-4 py-3 text-left text-xs text-gray-400 font-mono">
                     {row.value != null && r > 0 ? pct(Math.abs(row.value)) : ''}
@@ -233,8 +232,7 @@ function FCReport({ brand, month }: { brand: string; month: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const monthStart = `${month}-01`
-    const monthEnd   = `${month}-31`
+    const { start: monthStart, end: monthEnd } = monthRange(month)
 
     const { data: sales } = await (supabase.from('daily_sales') as any)
       .select('product_sku, product_name, qty_sold, revenue')
@@ -360,8 +358,7 @@ function BreakevenReport({ brand, month }: { brand: string; month: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const monthStart = `${month}-01`
-    const monthEnd   = `${month}-31`
+    const { start: monthStart, end: monthEnd } = monthRange(month)
 
     const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
       (supabase.from('daily_sales') as any).select('revenue, qty_sold, product_sku').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd),
@@ -486,8 +483,7 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const monthStart = `${month}-01`
-    const monthEnd   = `${month}-31`
+    const { start: monthStart, end: monthEnd } = monthRange(month)
 
     const { data: purchases } = await (supabase.from('purchases') as any)
       .select('*').eq('brand_id', brand).gte('purchase_date', monthStart).lte('purchase_date', monthEnd)
@@ -532,7 +528,7 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
 
   return (
     <div className="space-y-5">
-      <KpiCard label="إجمالي المشتريات" value={`${data.total.toLocaleString('ar-SA', { minimumFractionDigits: 2 })} ر.س`} color="text-red-600" sub={`${formatYearMonth(month)}`} />
+      <KpiCard label="إجمالي المشتريات" value={`${data.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س`} color="text-red-600" sub={`${formatYearMonth(month)}`} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
@@ -611,8 +607,7 @@ function SalesReport({ brand, month }: { brand: string; month: string }) {
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const monthStart = `${month}-01`
-    const monthEnd   = `${month}-31`
+    const { start: monthStart, end: monthEnd } = monthRange(month)
 
     const { data: sales } = await (supabase.from('daily_sales') as any)
       .select('*').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd)

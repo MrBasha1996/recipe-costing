@@ -12,7 +12,7 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="ar" dir="rtl" className="h-full" suppressHydrationWarning>
+    <html lang="ar-u-nu-latn" dir="rtl" className="h-full" suppressHydrationWarning>
       <body className="min-h-full antialiased" style={{ background: 'var(--color-bg)', color: 'var(--color-text)' }} suppressHydrationWarning>{children}</body>
     </html>
   )

@@ -274,7 +274,7 @@ export default function UsersPage() {
                       {(log as any).performer}
                     </td>
                     <td className="px-4 py-2.5 text-left text-xs text-gray-400 font-mono">
-                      {new Date(log.created_at).toLocaleString('ar-SA')}
+                      {new Date(log.created_at).toLocaleString('en-US')}
                     </td>
                   </tr>
                 ))}

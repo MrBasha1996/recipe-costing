@@ -1,10 +1,12 @@
 'use client'
 
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { downloadPurchasesTemplate, parsePurchasesFile } from '@/lib/excel'
+import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow } from '@/types'
 
 interface BatchSummary {
@@ -19,6 +21,7 @@ interface BatchSummary {
 export default function PurchasingPage() {
   const { brand } = useBrandStore()
   const { profile } = useUserStore()
+  const router = useRouter()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [preview, setPreview] = useState<PurchaseRow[]>([])
@@ -29,6 +32,8 @@ export default function PurchasingPage() {
   const [batches, setBatches] = useState<BatchSummary[]>([])
   const [loadingHistory, setLoadingHistory] = useState(true)
   const [deletingBatch, setDeletingBatch] = useState<string | null>(null)
+  // unit_conversions map: sku → { factor, buy_unit, recipe_unit }
+  const [conversions, setConversions] = useState<Map<string, { factor: number; buy_unit: string; recipe_unit: string }>>(new Map())
 
   const loadHistory = useCallback(async () => {
     setLoadingHistory(true)
@@ -61,6 +66,21 @@ export default function PurchasingPage() {
     setLoadingHistory(false)
   }, [brand])
 
+  // Load unit conversions for the current brand
+  useEffect(() => {
+    const supabase = createClient()
+    ;(supabase.from('unit_conversions') as any)
+      .select('ing_sku, factor, buy_unit, recipe_unit')
+      .eq('brand_id', brand)
+      .then(({ data }: any) => {
+        const map = new Map<string, { factor: number; buy_unit: string; recipe_unit: string }>()
+        for (const row of (data || []) as any[]) {
+          map.set(row.ing_sku, { factor: row.factor, buy_unit: row.buy_unit, recipe_unit: row.recipe_unit })
+        }
+        setConversions(map)
+      })
+  }, [brand])
+
   useEffect(() => { loadHistory() }, [loadHistory])
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -69,9 +89,24 @@ export default function PurchasingPage() {
     setParseError(null)
     setImportMsg(null)
     try {
-      const rows = await parsePurchasesFile(file)
-      if (rows.length === 0) { setParseError('لم يتم العثور على بيانات صالحة في الملف'); return }
-      setPreview(rows)
+      // Try Foodics format first
+      const foodics = await parseFoodicsFile(file)
+      if (foodics.type === 'purchases' && foodics.purchases.length > 0) {
+        // Apply unit conversions from DB
+        const rows = foodics.purchases.map(r => {
+          const conv = r.ing_sku ? conversions.get(r.ing_sku) : undefined
+          if (conv && r.qty > 0) {
+            return { ...r, unit_cost: r.total_price / (r.qty * conv.factor) }
+          }
+          return r
+        })
+        setPreview(rows)
+      } else {
+        // Fallback to standard Excel
+        const rows = await parsePurchasesFile(file)
+        if (rows.length === 0) { setParseError('لم يتم العثور على بيانات صالحة في الملف'); return }
+        setPreview(rows)
+      }
     } catch (err: any) {
       setParseError(err.message)
     }
@@ -142,12 +177,20 @@ export default function PurchasingPage() {
           <h1 className="text-xl font-bold text-gray-900">استيراد المشتريات</h1>
           <p className="text-gray-500 text-sm mt-0.5">استيراد فواتير الشراء من Excel وتحديث أسعار المواد تلقائياً</p>
         </div>
-        <button
-          onClick={downloadPurchasesTemplate}
-          className="flex items-center gap-2 text-sm px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors"
-        >
-          ⬇ تنزيل القالب
-        </button>
+        <div className="flex items-center gap-3">
+          <div className={`flex items-center gap-2 text-sm font-semibold px-4 py-2 rounded-lg border ${
+            brand === 'ti' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-amber-50 text-amber-700 border-amber-200'
+          }`}>
+            <span>البراند:</span>
+            <span>{brand === 'ti' ? 'Three In 🍔' : 'باب البلد 🫕'}</span>
+          </div>
+          <button
+            onClick={() => downloadPurchasesTemplate().catch(console.error)}
+            className="flex items-center gap-2 text-sm px-4 py-2 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors"
+          >
+            ⬇ تنزيل القالب
+          </button>
+        </div>
       </div>
 
       {/* Upload zone */}
@@ -156,8 +199,12 @@ export default function PurchasingPage() {
         className="border-2 border-dashed border-gray-300 hover:border-blue-400 rounded-xl p-10 text-center cursor-pointer transition-colors bg-white"
       >
         <div className="text-4xl mb-3">📂</div>
-        <p className="text-gray-600 font-medium">اضغط لاختيار ملف Excel</p>
-        <p className="text-gray-400 text-sm mt-1">.xlsx أو .xls</p>
+        <p className="text-gray-600 font-medium">اضغط لاختيار ملف</p>
+        <p className="text-gray-400 text-sm mt-1">Foodics — تاريخ المخزون · أو Excel عام</p>
+        <div className="flex items-center justify-center gap-3 mt-3">
+          <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">📦 Foodics تاريخ المخزون</span>
+          <span className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-full">📄 Excel عام</span>
+        </div>
         <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
       </div>
 
@@ -204,12 +251,25 @@ export default function PurchasingPage() {
                 {preview.map((r, i) => (
                   <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-2.5 text-gray-600 font-mono text-xs">{r.purchase_date}</td>
-                    <td className="px-4 py-2.5 text-gray-700">{r.supplier_name}</td>
+                    <td className="px-4 py-2.5 text-gray-700 text-xs">{r.supplier_name}</td>
                     <td className="px-4 py-2.5 text-gray-400 font-mono text-xs">{r.ing_sku}</td>
-                    <td className="px-4 py-2.5 text-gray-900 font-medium">{r.ing_name}</td>
-                    <td className="px-4 py-2.5 text-left text-gray-600 font-mono">{r.qty} {r.unit}</td>
-                    <td className="px-4 py-2.5 text-left font-mono font-semibold text-gray-800">{r.total_price.toFixed(2)}</td>
-                    <td className="px-4 py-2.5 text-left font-mono text-blue-700">{r.unit_cost.toFixed(6)}</td>
+                    <td className="px-4 py-2.5 text-gray-900 font-medium text-xs">{r.ing_name}</td>
+                    <td className="px-4 py-2.5 text-left text-gray-600 font-mono text-xs">{r.qty} {r.unit}</td>
+                    <td className="px-4 py-2.5 text-left font-mono font-semibold text-gray-800 text-xs">{r.total_price.toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-left font-mono text-xs">
+                      {r.unit_cost > 0 ? (
+                        <div>
+                          <span className="text-blue-700">{r.unit_cost.toFixed(6)}</span>
+                          {r.ing_sku && conversions.has(r.ing_sku) && (
+                            <div className="text-gray-400 text-xs leading-none mt-0.5">
+                              ÷ {conversions.get(r.ing_sku)!.factor} → {conversions.get(r.ing_sku)!.recipe_unit}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-amber-500" title="SKU غير موجود في جدول التحويلات">⚠ غير محدد</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -264,13 +324,15 @@ export default function PurchasingPage() {
             </thead>
             <tbody>
               {batches.map(b => (
-                <tr key={b.import_batch} className="border-b border-gray-100 hover:bg-gray-50">
+                <tr key={b.import_batch}
+                  className="border-b border-gray-100 hover:bg-blue-50 cursor-pointer"
+                  onClick={() => router.push(`/purchasing/${b.import_batch}`)}>
                   <td className="px-4 py-3 font-mono text-xs text-gray-600">{b.purchase_date}</td>
                   <td className="px-4 py-3 text-gray-800">{b.supplier_name}</td>
                   <td className="px-4 py-3 text-center text-gray-600">{b.item_count}</td>
                   <td className="px-4 py-3 text-left font-mono font-semibold text-gray-800">{b.total_amount.toFixed(2)} ر.س</td>
-                  <td className="px-4 py-3 text-left text-xs text-gray-400 font-mono">{new Date(b.imported_at).toLocaleString('ar-SA')}</td>
-                  <td className="px-4 py-3 text-left">
+                  <td className="px-4 py-3 text-left text-xs text-gray-400 font-mono">{new Date(b.imported_at).toLocaleString('en-US')}</td>
+                  <td className="px-4 py-3 text-left" onClick={e => e.stopPropagation()}>
                     <button
                       onClick={() => handleDeleteBatch(b.import_batch)}
                       disabled={deletingBatch === b.import_batch}

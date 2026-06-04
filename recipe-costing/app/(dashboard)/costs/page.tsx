@@ -133,7 +133,7 @@ export default function CostsPage() {
         ].map(c => (
           <div key={c.label} className={`${c.bg} rounded-xl p-4 border border-gray-200`}>
             <div className="text-xs text-gray-500 mb-1">{c.label}</div>
-            <div className={`text-xl font-bold font-mono ${c.color}`}>{c.value.toLocaleString('ar-SA', { minimumFractionDigits: 2 })} ر.س</div>
+            <div className={`text-xl font-bold font-mono ${c.color}`}>{c.value.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</div>
           </div>
         ))}
       </div>
@@ -197,7 +197,7 @@ export default function CostsPage() {
                   {labor.map(r => (
                     <tr key={r.id} className="border-b border-gray-100 hover:bg-gray-50">
                       <td className="px-4 py-3 text-gray-800">{r.description}</td>
-                      <td className="px-4 py-3 text-left font-mono font-semibold text-blue-700">{r.amount.toLocaleString('ar-SA', { minimumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-left font-mono font-semibold text-blue-700">{r.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-left">
                         <button onClick={() => deleteItem('labor_costs', r.id, loadLabor)} disabled={deleting === r.id}
                           className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40">حذف</button>
@@ -206,7 +206,7 @@ export default function CostsPage() {
                   ))}
                   <tr className="bg-blue-50 border-t-2 border-blue-200">
                     <td className="px-4 py-3 font-semibold text-blue-800">الإجمالي</td>
-                    <td className="px-4 py-3 text-left font-mono font-bold text-blue-800 text-base">{totalLabor.toLocaleString('ar-SA', { minimumFractionDigits: 2 })} ر.س</td>
+                    <td className="px-4 py-3 text-left font-mono font-bold text-blue-800 text-base">{totalLabor.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</td>
                     <td />
                   </tr>
                 </tbody>
@@ -272,7 +272,7 @@ export default function CostsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-gray-800">{r.description}</td>
-                      <td className="px-4 py-3 text-left font-mono font-semibold text-amber-700">{r.amount.toLocaleString('ar-SA', { minimumFractionDigits: 2 })}</td>
+                      <td className="px-4 py-3 text-left font-mono font-semibold text-amber-700">{r.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</td>
                       <td className="px-4 py-3 text-left">
                         <button onClick={() => deleteItem('overhead_costs', r.id, loadOverhead)} disabled={deleting === r.id}
                           className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40">حذف</button>
@@ -281,7 +281,7 @@ export default function CostsPage() {
                   ))}
                   <tr className="bg-amber-50 border-t-2 border-amber-200">
                     <td className="px-4 py-3 font-semibold text-amber-800" colSpan={2}>الإجمالي</td>
-                    <td className="px-4 py-3 text-left font-mono font-bold text-amber-800 text-base">{totalOverhead.toLocaleString('ar-SA', { minimumFractionDigits: 2 })} ر.س</td>
+                    <td className="px-4 py-3 text-left font-mono font-bold text-amber-800 text-base">{totalOverhead.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س</td>
                     <td />
                   </tr>
                 </tbody>

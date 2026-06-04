@@ -5,7 +5,7 @@ import { NextResponse, type NextRequest } from 'next/server'
 const ACCOUNTANT_ONLY = ['/users', '/dashboard', '/comparison', '/settings', '/purchasing', '/costs']
 
 // Routes accessible by 'accountant' or 'ops'
-const ACCOUNTANT_OPS = ['/inventory', '/sales']
+const ACCOUNTANT_OPS = ['/inventory', '/sales', '/waste']
 
 // Routes accessible by 'accountant' or 'management'
 const ACCOUNTANT_MGMT = ['/reports']
