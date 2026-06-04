@@ -11,7 +11,7 @@ import {
   ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts'
 
-type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance'
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost'
 
 // ── Helpers ────────────────────────────────────────────────────────
 function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
@@ -47,6 +47,7 @@ export default function ReportsPage() {
     { key: 'sales',     label: 'تحليل المبيعات' },
     { key: 'menu',      label: 'هندسة القائمة' },
     { key: 'variance',  label: 'مقارنة FC%' },
+    { key: 'primecost', label: 'التكلفة الإجمالية' },
   ]
 
   return (
@@ -79,6 +80,7 @@ export default function ReportsPage() {
       {tab === 'sales'     && <SalesReport         brand={brand} month={month} />}
       {tab === 'menu'      && <MenuEngineering     brand={brand} month={month} />}
       {tab === 'variance'  && <VarianceReport      brand={brand} month={month} />}
+      {tab === 'primecost' && <PrimeCostReport    brand={brand} month={month} />}
     </div>
   )
 }
@@ -1049,6 +1051,150 @@ function VarianceReport({ brand, month }: { brand: string; month: string }) {
           </table>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ── 8. Prime Cost Report ──────────────────────────────────────────
+
+function PrimeCostReport({ brand, month }: { brand: string; month: string }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [summary, setSummary] = useState<{ laborPct: number; overheadPct: number; totalRev: number } | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+      (supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end),
+      (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+      (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+    ])
+
+    if (!sales?.length) { setRows([]); setLoading(false); return }
+
+    const map = new Map<string, { name: string; qty: number; revenue: number }>()
+    for (const s of sales as any[]) {
+      const ex = map.get(s.product_sku)
+      if (ex) { ex.qty += s.qty_sold; ex.revenue += s.revenue }
+      else map.set(s.product_sku, { name: s.product_name, qty: s.qty_sold, revenue: s.revenue })
+    }
+
+    const totalRevExVat = [...map.values()].reduce((s, p) => s + p.revenue / 1.15, 0)
+    const totalLabor    = (labor    || []).reduce((s: number, r: any) => s + r.amount, 0)
+    const totalOverhead = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
+    const laborPct    = totalRevExVat > 0 ? (totalLabor    / totalRevExVat) * 100 : 0
+    const overheadPct = totalRevExVat > 0 ? (totalOverhead / totalRevExVat) * 100 : 0
+    setSummary({ laborPct, overheadPct, totalRev: totalRevExVat })
+
+    const skus = [...map.keys()]
+    const { data: recipes } = await (supabase.from('recipes') as any)
+      .select('sku, total_cost, yield_portions, food_cost_pct, sell_price')
+      .eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+
+    const recipeMap = new Map<string, any>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+
+    const result = [...map.entries()].map(([sku, p]) => {
+      const rec = recipeMap.get(sku)
+      if (!rec) return null
+      const revExVat = p.revenue / 1.15
+      const fcPct = rec.food_cost_pct as number
+      const primeCostPct = fcPct + laborPct + overheadPct
+      const sellExVat = (rec.sell_price as number) / 1.15
+      const fcPerUnit = (rec.total_cost as number) / Math.max(rec.yield_portions, 1)
+      const opMargin = sellExVat - fcPerUnit - (laborPct / 100) * sellExVat - (overheadPct / 100) * sellExVat
+      return { sku, name: p.name, qty: p.qty, revExVat, fcPct, laborPct, overheadPct, primeCostPct, opMarginPct: 100 - primeCostPct, opMargin }
+    }).filter(Boolean).sort((a: any, b: any) => a.opMarginPct - b.opMarginPct)
+
+    setRows(result as any[]); setLoading(false)
+  }, [brand, month])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length || !summary) return (
+    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+      لا توجد بيانات. تأكد من إدخال تكاليف العمالة والتكاليف الثابتة في صفحة التكاليف لهذا الشهر.
+    </div>
+  )
+
+  const avgFc       = rows.reduce((s, r) => s + r.fcPct * r.revExVat, 0) / Math.max(summary.totalRev, 1)
+  const avgOpMargin = 100 - avgFc - summary.laborPct - summary.overheadPct
+  const clr = (v: number) => v >= 20 ? 'text-green-600' : v >= 10 ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">التكلفة الإجمالية (Prime Cost)</h2>
+        <p className="text-xs text-gray-500 mt-0.5">توزيع تكاليف العمالة والتشغيل على كل منتج بنسبة إيراده</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'Food Cost', val: avgFc, color: 'blue' },
+          { label: 'العمالة', val: summary.laborPct, color: 'purple' },
+          { label: 'التكاليف الثابتة', val: summary.overheadPct, color: 'amber' },
+        ].map(({ label, val, color }) => (
+          <div key={label} className={`bg-${color}-50 border border-${color}-100 rounded-xl p-4 text-center`}>
+            <div className={`text-xs text-${color}-600 mb-1`}>{label}</div>
+            <div className={`text-2xl font-bold font-mono text-${color}-700`}>{val.toFixed(1)}%</div>
+          </div>
+        ))}
+        <div className={`border rounded-xl p-4 text-center ${avgOpMargin >= 20 ? 'bg-green-50 border-green-100' : avgOpMargin >= 10 ? 'bg-amber-50 border-amber-100' : 'bg-red-50 border-red-100'}`}>
+          <div className={`text-xs mb-1 ${clr(avgOpMargin)}`}>هامش التشغيل</div>
+          <div className={`text-2xl font-bold font-mono ${clr(avgOpMargin)}`}>{avgOpMargin.toFixed(1)}%</div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="text-xs text-gray-500 mb-3">تركيب التكلفة الإجمالية</div>
+        <div className="flex h-8 rounded-lg overflow-hidden gap-px">
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${avgFc}%`, background: '#3b82f6' }}>FC {avgFc.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${summary.laborPct}%`, background: '#8b5cf6' }}>عمالة {summary.laborPct.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${summary.overheadPct}%`, background: '#f59e0b' }}>ثابتة {summary.overheadPct.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium flex-1" style={{ background: '#10b981' }}>هامش {avgOpMargin.toFixed(0)}%</div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                <th className="px-4 py-3 font-medium text-center">الكمية</th>
+                <th className="px-4 py-3 font-medium text-center bg-blue-50 text-blue-700">FC%</th>
+                <th className="px-4 py-3 font-medium text-center bg-purple-50 text-purple-700">عمالة%</th>
+                <th className="px-4 py-3 font-medium text-center bg-amber-50 text-amber-700">ثابتة%</th>
+                <th className="px-4 py-3 font-medium text-center">Prime Cost%</th>
+                <th className="px-4 py-3 font-medium text-center">هامش التشغيل%</th>
+                <th className="px-4 py-3 font-medium text-center">هامش / وحدة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium text-gray-900">{r.name}</div>
+                    <div className="text-xs text-gray-400 font-mono">{r.sku}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-blue-600 font-semibold">{r.fcPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-purple-600">{r.laborPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-amber-600">{r.overheadPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm font-semibold text-gray-700">{r.primeCostPct.toFixed(1)}%</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-bold ${clr(r.opMarginPct)}`}>{r.opMarginPct.toFixed(1)}%</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-xs ${clr(r.opMarginPct)}`}>{r.opMargin.toFixed(2)} ر.س</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="text-xs text-gray-400">* العمالة والتكاليف الثابتة موزّعة بنسبة إيراد كل منتج. مرتّب من الأقل هامشاً للأعلى.</p>
     </div>
   )
 }
