@@ -178,7 +178,7 @@ export default function SettingsPage() {
               />
               <span className="text-sm text-gray-500">%</span>
             </div>
-            <button onClick={saveCommission} disabled={savingCommission || !isSuperAdmin && !hasPermission('settings', 'edit')}
+            <button onClick={saveCommission} disabled={savingCommission || !isSuperAdmin && !hasPermission('settings', 'update')}
               className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg disabled:opacity-40 font-medium">
               {savingCommission ? 'جارٍ الحفظ...' : 'حفظ'}
             </button>
@@ -217,7 +217,7 @@ export default function SettingsPage() {
                 className="w-20 border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-left font-mono focus:outline-none focus:border-blue-500" />
               <span className="text-sm text-gray-500">%</span>
             </div>
-            <button onClick={saveFcTargets} disabled={savingFc || (!isSuperAdmin && !hasPermission('settings', 'edit'))}
+            <button onClick={saveFcTargets} disabled={savingFc || (!isSuperAdmin && !hasPermission('settings', 'update'))}
               className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg disabled:opacity-40 font-medium">
               {savingFc ? 'جارٍ الحفظ...' : 'حفظ'}
             </button>

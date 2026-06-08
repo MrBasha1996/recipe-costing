@@ -55,7 +55,8 @@ export default function ReportsPage() {
       (supabase.from('brands') as any)
         .select('fc_target_low, fc_target_high').eq('id', brand).single(),
     ]).then(([{ data: salesData }, { data: brandRow }]) => {
-      const uniq = [...new Set((salesData || []).map((r: any) => r.branch_name as string).filter((x: unknown): x is string => Boolean(x)))].sort()
+      const names: string[] = (salesData || []).map((r: any) => r.branch_name as string).filter((x: unknown): x is string => Boolean(x))
+      const uniq = [...new Set(names)].sort()
       setBranches(uniq)
       if (brandRow) {
         setFcLow(brandRow.fc_target_low ?? 35)
@@ -2572,7 +2573,7 @@ function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
       setLoading(false)
     }
     load()
-  }, [brand, month, branch])
+  }, [brand, month])
 
   if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
 
