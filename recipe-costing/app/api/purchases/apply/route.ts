@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
 
 /**
  * POST /api/purchases/apply
@@ -15,6 +16,10 @@ import { createAdminClient } from '@/lib/supabase/admin'
  *   - Records price changes in price_history
  */
 export async function POST(request: NextRequest) {
+  const serverClient = await createClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+
   const { brand_id, import_batch, performed_by } = await request.json()
   if (!brand_id || !import_batch) {
     return NextResponse.json({ error: 'brand_id و import_batch مطلوبان' }, { status: 400 })
@@ -54,13 +59,13 @@ export async function POST(request: NextRequest) {
 
   // ── 2. Fetch current stock quantities ─────────────────────────────
   const { data: stockRows } = await (admin.from('stock_items') as any)
-    .select('ing_sku, current_qty')
+    .select('ing_sku, current_qty, min_qty')
     .eq('brand_id', brand_id)
     .in('ing_sku', skus)
 
-  const stockMap = new Map<string, number>()
+  const stockMap = new Map<string, { qty: number; min_qty: number }>()
   for (const s of (stockRows || []) as any[]) {
-    stockMap.set(s.ing_sku, s.current_qty ?? 0)
+    stockMap.set(s.ing_sku, { qty: s.current_qty ?? 0, min_qty: s.min_qty ?? 0 })
   }
 
   // ── 3. Fetch current ingredient costs ────────────────────────────
@@ -81,7 +86,7 @@ export async function POST(request: NextRequest) {
   const now = new Date().toISOString()
 
   for (const [sku, purchase] of purchaseMap) {
-    const currentStock = stockMap.get(sku) ?? 0
+    const currentStock = stockMap.get(sku)?.qty ?? 0
     const currentCost = costMap.get(sku)?.cost ?? 0
     const ingName = costMap.get(sku)?.name ?? purchase.name
     const purchaseUnitCost = purchase.total_value / purchase.qty
@@ -116,7 +121,7 @@ export async function POST(request: NextRequest) {
       ing_name: ingName,
       unit: purchase.unit,
       current_qty: Math.max(0, currentStock) + purchase.qty,
-      min_qty: 0,
+      min_qty: stockMap.get(sku)?.min_qty ?? 0,
       updated_at: now,
     })
   }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { createClient } from '@/lib/supabase/server'
 
 /**
  * POST /api/sales/explode
@@ -17,7 +18,11 @@ import { createAdminClient } from '@/lib/supabase/admin'
  * 6. Insert stock_movements for audit trail
  */
 export async function POST(request: NextRequest) {
-  const { brand_id, import_batch } = await request.json()
+  const serverClient = await createClient()
+  const { data: { user } } = await serverClient.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+
+  const { brand_id, import_batch, auto_produce_batches = false, performed_by = null } = await request.json()
   if (!brand_id || !import_batch) {
     return NextResponse.json({ error: 'brand_id و import_batch مطلوبان' }, { status: 400 })
   }
@@ -52,7 +57,7 @@ export async function POST(request: NextRequest) {
 
   const recipeMap = new Map<string, { id: string; yield_portions: number }>()
   for (const r of (recipes || []) as any[]) {
-    recipeMap.set(r.sku, { id: r.id, yield_portions: r.yield_portions })
+    recipeMap.set(r.sku, { id: r.id, yield_portions: Math.max(r.yield_portions, 1) })
   }
 
   const recipeIds = (recipes || []).map((r: any) => r.id)
@@ -66,6 +71,15 @@ export async function POST(request: NextRequest) {
     .in('recipe_id', recipeIds)
 
   if (ingErr) return NextResponse.json({ error: ingErr.message }, { status: 500 })
+
+  // ── 3b. Fetch unit conversions (recipe_unit → buy_unit) ──────────
+  const allIngSkus = [...new Set((ingredients || []).map((i: any) => i.ing_sku))]
+  const { data: ucRows } = await (admin.from('unit_conversions') as any)
+    .select('ing_sku, factor')
+    .eq('brand_id', brand_id)
+    .in('ing_sku', allIngSkus)
+  const ucMap = new Map<string, number>()
+  for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
 
   // ── 4. Aggregate deductions per ingredient ────────────────────────
   // deductMap: ing_sku → { ing_name, total_qty }
@@ -83,9 +97,10 @@ export async function POST(request: NextRequest) {
     exploded++
     for (const ing of recipeIngs as any[]) {
       if (ing.yield_pct <= 0) continue
-      // Gross quantity from stock per portion × qty_sold
+      // Gross quantity in recipe_unit per portion × qty_sold, then convert to buy_unit
       const grossPerPortion = ing.qty / (ing.yield_pct / 100) / recipe.yield_portions
-      const totalDeduct = grossPerPortion * qtySold
+      const factor = ucMap.get(ing.ing_sku) ?? 1
+      const totalDeduct = (grossPerPortion * qtySold) / factor
 
       const existing = deductMap.get(ing.ing_sku)
       if (existing) {
@@ -98,6 +113,68 @@ export async function POST(request: NextRequest) {
 
   if (!deductMap.size) {
     return NextResponse.json({ exploded, skipped, note: 'لا توجد مكونات للخصم' })
+  }
+
+  // ── auto_produce: إنتاج الباتشات الناقصة قبل الخصم ───────────────
+  const produced_batches: { sku: string; name: string; qty: number }[] = []
+
+  if (auto_produce_batches) {
+    // تحديد الباتشات المطلوبة (is_semi=true في المكونات)
+    const batchSkusNeeded = new Set<string>()
+    for (const ing of (ingredients || []) as any[]) {
+      if (ing.is_semi) batchSkusNeeded.add(ing.ing_sku)
+    }
+
+    if (batchSkusNeeded.size > 0) {
+      // احسب ما يحتاجه كل باتش
+      const batchNeedsMap = new Map<string, { name: string; qty: number }>()
+      for (const ing of (ingredients || []) as any[]) {
+        if (!ing.is_semi) continue
+        const recipe = [...recipeMap.values()].find(r => {
+          const recipeIngs = (ingredients || []).filter((i: any) => i.recipe_id === r.id)
+          return recipeIngs.some((i: any) => i.ing_sku === ing.ing_sku)
+        })
+        if (!recipe) continue
+        // جلب المبيعات التي تستخدم هذه الوصفة
+        for (const [pSku, r] of recipeMap) {
+          if (r.id !== (ingredients as any[]).find((i: any) => i.recipe_id === r.id && i.ing_sku === ing.ing_sku)?.recipe_id) continue
+          const qtySold = saleMap.get(pSku) ?? 0
+          if (!qtySold) continue
+          const needed = (ing.qty / (ing.yield_pct / 100)) / r.yield_portions * qtySold
+          const ex = batchNeedsMap.get(ing.ing_sku)
+          if (ex) ex.qty += needed
+          else batchNeedsMap.set(ing.ing_sku, { name: ing.ing_name, qty: needed })
+        }
+      }
+
+      // جلب المخزون الحالي للباتشات
+      const { data: batchStocks } = await (admin.from('stock_items') as any)
+        .select('ing_sku, current_qty')
+        .eq('brand_id', brand_id)
+        .in('ing_sku', [...batchSkusNeeded])
+
+      const batchStockMap = new Map<string, number>()
+      for (const s of (batchStocks || []) as any[]) batchStockMap.set(s.ing_sku, s.current_qty)
+
+      // أنتج كل باتش ناقص
+      for (const [bSku, bInfo] of batchNeedsMap) {
+        const inStock = batchStockMap.get(bSku) ?? 0
+        const deficit = bInfo.qty - inStock
+        if (deficit <= 0) continue
+
+        const produceRes = await fetch(`${request.nextUrl.origin}/api/batches/produce`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Cookie': request.headers.get('cookie') ?? '',
+          },
+          body: JSON.stringify({ brand_id, batch_sku: bSku, qty_portions: deficit, performed_by, note: `إنتاج تلقائي — دفعة ${import_batch.slice(0, 8)}` }),
+        })
+        if (produceRes.ok) {
+          produced_batches.push({ sku: bSku, name: bInfo.name, qty: deficit })
+        }
+      }
+    }
   }
 
   // ── 5. Fetch current stock_items for the affected SKUs ────────────
@@ -139,7 +216,7 @@ export async function POST(request: NextRequest) {
       movement_type: 'out',
       qty:           Math.round(qty * 1000) / 1000,
       note,
-      performed_by:  null,
+      performed_by,
     })
   }
 
@@ -150,10 +227,17 @@ export async function POST(request: NextRequest) {
 
   await (admin.from('stock_movements') as any).insert(movementRows)
 
+  // Mark all sales rows in this batch as exploded
+  await (admin.from('daily_sales') as any)
+    .update({ exploded_at: new Date().toISOString() })
+    .eq('brand_id', brand_id)
+    .eq('import_batch', import_batch)
+
   return NextResponse.json({
     ok: true,
     exploded,
     skipped,
     deducted: deductMap.size,
+    produced_batches,
   })
 }

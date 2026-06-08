@@ -10,11 +10,21 @@ export interface ModulePermState {
   can_update: boolean
   can_delete: boolean
   can_approve: boolean
+  can_post: boolean
+  can_print: boolean
+  can_export: boolean
   can_import: boolean
+  // extra — shown only for modules that support price editing
   can_edit_price: boolean
 }
 
 export type PermState = Record<string, ModulePermState>
+
+const EMPTY_PERM: ModulePermState = {
+  can_view: false, can_create: false, can_update: false, can_delete: false,
+  can_approve: false, can_post: false, can_print: false, can_export: false,
+  can_import: false, can_edit_price: false,
+}
 
 /** Convert DB role_permissions array + modules array into PermState */
 export function buildPermState(modules: Module[], rp: RolePermission[]): PermState {
@@ -28,6 +38,9 @@ export function buildPermState(modules: Module[], rp: RolePermission[]): PermSta
       can_update:     r?.can_update     ?? false,
       can_delete:     r?.can_delete     ?? false,
       can_approve:    r?.can_approve    ?? false,
+      can_post:       r?.can_post       ?? false,
+      can_print:      r?.can_print      ?? false,
+      can_export:     r?.can_export     ?? false,
       can_import:     r?.can_import     ?? false,
       can_edit_price: r?.can_edit_price ?? false,
     }
@@ -35,7 +48,16 @@ export function buildPermState(modules: Module[], rp: RolePermission[]): PermSta
   return state
 }
 
-// ── Inheritance logic ──────────────────────────────────────────────
+// ── Inheritance / dependency logic ─────────────────────────────────
+//
+// Rules:
+//   Checking any action        → auto-check view
+//   Checking delete            → auto-check view + create + update
+//   Checking update            → auto-check view + create
+//   Checking create            → auto-check view
+//   Unchecking view            → uncheck ALL
+//   Unchecking create          → uncheck update + delete
+//   Unchecking update          → uncheck delete
 
 export function applyInheritance(
   prev: ModulePermState,
@@ -45,22 +67,21 @@ export function applyInheritance(
   let next = { ...prev, [`can_${action}`]: value }
 
   if (value) {
+    // Every action requires view
+    next.can_view = true
     if (action === 'delete') {
-      next = { ...next, can_view: true, can_create: true, can_update: true, can_delete: true }
+      next.can_create = true
+      next.can_update = true
     } else if (action === 'update') {
-      next.can_view = true; next.can_create = true; next.can_update = true
-    } else if (action === 'create') {
-      next.can_view = true; next.can_create = true
-    } else if (action === 'approve' || action === 'edit_price') {
-      next.can_view = true
-    } else if (action === 'import') {
-      next.can_view = true
+      next.can_create = true
     }
   } else {
     if (action === 'view') {
-      next = { can_view: false, can_create: false, can_update: false, can_delete: false, can_approve: false, can_import: false, can_edit_price: false }
+      // Removing view removes everything
+      return { ...EMPTY_PERM }
     } else if (action === 'create') {
-      next.can_update = false; next.can_delete = false
+      next.can_update = false
+      next.can_delete = false
     } else if (action === 'update') {
       next.can_delete = false
     }
@@ -70,19 +91,21 @@ export function applyInheritance(
 
 // ── Column definitions ─────────────────────────────────────────────
 
-const BASE_ACTIONS: { key: PermissionAction; label: string; color: string }[] = [
-  { key: 'view',   label: 'عرض',   color: 'text-blue-600' },
-  { key: 'create', label: 'إضافة', color: 'text-green-600' },
-  { key: 'update', label: 'تعديل', color: 'text-amber-600' },
-  { key: 'delete', label: 'حذف',   color: 'text-red-600' },
+// 9 standard columns shown for every module
+const STANDARD_ACTIONS: { key: PermissionAction; label: string; color: string }[] = [
+  { key: 'view',    label: 'عرض',     color: 'text-blue-600' },
+  { key: 'create',  label: 'إضافة',   color: 'text-green-600' },
+  { key: 'update',  label: 'تعديل',   color: 'text-amber-600' },
+  { key: 'delete',  label: 'حذف',     color: 'text-red-600' },
+  { key: 'approve', label: 'اعتماد',  color: 'text-purple-600' },
+  { key: 'post',    label: 'ترحيل',   color: 'text-cyan-600' },
+  { key: 'print',   label: 'طباعة',   color: 'text-slate-600' },
+  { key: 'export',  label: 'تصدير',   color: 'text-teal-600' },
+  { key: 'import',  label: 'استيراد', color: 'text-indigo-600' },
 ]
 
-// Extra columns shown only for specific modules
-const SPECIAL_ACTIONS: { key: PermissionAction; label: string; color: string; modules: string[] }[] = [
-  { key: 'approve',    label: 'اعتماد',      color: 'text-purple-600', modules: ['costing'] },
-  { key: 'edit_price', label: 'تعديل سعر',   color: 'text-orange-600', modules: ['costing'] },
-  { key: 'import',     label: 'استيراد',     color: 'text-indigo-600', modules: ['purchasing', 'sales'] },
-]
+// Extra column — only for modules that have price management
+const PRICE_MODULES = new Set(['costing', 'products', 'ingredients'])
 
 // ── Component ──────────────────────────────────────────────────────
 
@@ -113,25 +136,23 @@ export default function PermissionsMatrix({
       <table className="w-full text-sm">
         <thead>
           <tr className="bg-gray-50 border-b border-gray-200">
-            <th className="text-right px-4 py-3 text-xs text-gray-500 font-semibold w-48">الشاشة</th>
-            {BASE_ACTIONS.map(a => (
-              <th key={a.key} className={`px-4 py-3 text-xs font-semibold text-center w-20 ${a.color}`}>
+            <th className="text-right px-4 py-3 text-xs text-gray-500 font-semibold sticky right-0 bg-gray-50 z-10 min-w-[140px]">
+              الشاشة
+            </th>
+            {STANDARD_ACTIONS.map(a => (
+              <th key={a.key} className={`px-2 py-3 text-xs font-semibold text-center min-w-[60px] ${a.color}`}>
                 {a.label}
               </th>
             ))}
-            {SPECIAL_ACTIONS.map(a => (
-              <th key={a.key} className={`px-4 py-3 text-xs font-semibold text-center w-24 ${a.color}`}>
-                {a.label}
-              </th>
-            ))}
+            <th className="px-2 py-3 text-xs font-semibold text-center min-w-[70px] text-orange-600">
+              تعديل سعر
+            </th>
           </tr>
         </thead>
         <tbody>
           {modules.filter(m => m.is_active).map((mod, i) => {
-            const p = permState[mod.code] ?? {
-              can_view: false, can_create: false, can_update: false, can_delete: false,
-              can_approve: false, can_import: false, can_edit_price: false,
-            }
+            const p = permState[mod.code] ?? EMPTY_PERM
+            const hasPriceCol = PRICE_MODULES.has(mod.code)
             return (
               <tr
                 key={mod.code}
@@ -139,25 +160,25 @@ export default function PermissionsMatrix({
                   i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'
                 } ${!disabled ? 'hover:bg-blue-50/30' : ''}`}
               >
-                <td className="px-4 py-2.5">
+                <td className="px-4 py-2.5 sticky right-0 bg-inherit z-10">
                   <span className="text-gray-800 font-medium">{mod.name}</span>
-                  <span className="text-xs text-gray-400 font-mono mr-2">{mod.code}</span>
                 </td>
 
-                {/* Base columns */}
-                {BASE_ACTIONS.map(a => {
-                  const checked = isSuperAdmin ? true : p[`can_${a.key}` as keyof ModulePermState]
+                {STANDARD_ACTIONS.map(a => {
+                  const checked = isSuperAdmin ? true : p[`can_${a.key}` as keyof ModulePermState] as boolean
                   return (
-                    <td key={a.key} className="px-4 py-2.5 text-center">
+                    <td key={a.key} className="px-2 py-2.5 text-center">
                       <input
                         type="checkbox"
-                        checked={checked as boolean}
+                        checked={checked}
                         disabled={disabled}
                         onChange={e => handleChange(mod.code, a.key, e.target.checked)}
                         className={`w-4 h-4 rounded border-gray-300 transition-colors ${
-                          isSuperAdmin ? 'accent-gray-400 cursor-not-allowed opacity-60'
-                          : disabled ? 'cursor-not-allowed opacity-50'
-                          : 'cursor-pointer accent-blue-600'
+                          isSuperAdmin
+                            ? 'accent-gray-400 cursor-not-allowed opacity-60'
+                            : disabled
+                            ? 'cursor-not-allowed opacity-50'
+                            : 'cursor-pointer accent-blue-600'
                         }`}
                         title={isSuperAdmin ? 'Super Admin لديه جميع الصلاحيات تلقائياً' : undefined}
                       />
@@ -165,37 +186,33 @@ export default function PermissionsMatrix({
                   )
                 })}
 
-                {/* Special columns — checkbox if applicable, dash otherwise */}
-                {SPECIAL_ACTIONS.map(a => {
-                  const applicable = a.modules.includes(mod.code)
-                  if (!applicable) {
-                    return (
-                      <td key={a.key} className="px-4 py-2.5 text-center text-gray-300 text-xs">—</td>
-                    )
-                  }
-                  const checked = isSuperAdmin ? true : p[`can_${a.key}` as keyof ModulePermState]
-                  return (
-                    <td key={a.key} className="px-4 py-2.5 text-center">
-                      <input
-                        type="checkbox"
-                        checked={checked as boolean}
-                        disabled={disabled}
-                        onChange={e => handleChange(mod.code, a.key, e.target.checked)}
-                        className={`w-4 h-4 rounded border-gray-300 transition-colors ${
-                          isSuperAdmin ? 'accent-gray-400 cursor-not-allowed opacity-60'
-                          : disabled ? 'cursor-not-allowed opacity-50'
-                          : 'cursor-pointer accent-blue-600'
-                        }`}
-                        title={isSuperAdmin ? 'Super Admin لديه جميع الصلاحيات تلقائياً' : undefined}
-                      />
-                    </td>
-                  )
-                })}
+                {/* تعديل سعر — only for price-managed modules */}
+                <td className="px-2 py-2.5 text-center">
+                  {hasPriceCol ? (
+                    <input
+                      type="checkbox"
+                      checked={isSuperAdmin ? true : p.can_edit_price}
+                      disabled={disabled}
+                      onChange={e => handleChange(mod.code, 'edit_price', e.target.checked)}
+                      className={`w-4 h-4 rounded border-gray-300 transition-colors ${
+                        isSuperAdmin
+                          ? 'accent-gray-400 cursor-not-allowed opacity-60'
+                          : disabled
+                          ? 'cursor-not-allowed opacity-50'
+                          : 'cursor-pointer accent-orange-500'
+                      }`}
+                      title={isSuperAdmin ? 'Super Admin لديه جميع الصلاحيات تلقائياً' : undefined}
+                    />
+                  ) : (
+                    <span className="text-gray-300 text-xs">—</span>
+                  )}
+                </td>
               </tr>
             )
           })}
         </tbody>
       </table>
+
       {isSuperAdmin && (
         <div className="px-4 py-2.5 bg-amber-50 border-t border-amber-200 text-xs text-amber-700 flex items-center gap-1.5">
           ⚡ Super Admin لديه جميع الصلاحيات على جميع الشاشات — لا يمكن تقييدها

@@ -1,6 +1,6 @@
 export type BrandId = 'ti' | 'bb'
 export type BrandAccess = 'ti' | 'bb' | 'all'
-export type ProductCategory = 'Meal' | 'Batch'
+export type ProductCategory = 'Meal'
 export type ItemType = 'ingredient' | 'product'
 
 export interface Brand {
@@ -27,8 +27,16 @@ export interface Product {
   app_price: number | null
   app_sku: string | null
   unit: string | null
-  is_semi: boolean
   is_base: boolean
+  is_semi?: boolean
+  created_at: string
+}
+
+export interface BatchProduct {
+  sku: string
+  brand_id: BrandId
+  name: string
+  unit: string
   created_at: string
 }
 
@@ -324,9 +332,15 @@ export interface RolePermission {
   can_approve: boolean
   can_import: boolean
   can_edit_price: boolean
+  can_post: boolean
+  can_print: boolean
+  can_export: boolean
 }
 
-export type PermissionAction = 'view' | 'create' | 'update' | 'delete' | 'approve' | 'import' | 'edit_price'
+export type PermissionAction =
+  | 'view' | 'create' | 'update' | 'delete'
+  | 'approve' | 'import' | 'edit_price'
+  | 'post' | 'print' | 'export'
 
 export interface PermissionsMap {
   [moduleCode: string]: {
@@ -337,6 +351,9 @@ export interface PermissionsMap {
     can_approve: boolean
     can_import: boolean
     can_edit_price: boolean
+    can_post: boolean
+    can_print: boolean
+    can_export: boolean
   }
 }
 

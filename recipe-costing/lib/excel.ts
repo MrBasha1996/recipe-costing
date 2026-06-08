@@ -40,7 +40,7 @@ export function validatePurchaseRows(rows: PurchaseRow[]): { valid: PurchaseRow[
     if (result.success) {
       valid.push(row)
     } else {
-      const msg = result.error.errors[0]?.message ?? 'خطأ غير معروف'
+      const msg = result.error.issues[0]?.message ?? 'خطأ غير معروف'
       errors.push(`سطر ${i + 1} (${row.ing_name || '—'}): ${msg}`)
     }
   })
@@ -55,7 +55,7 @@ export function validateSaleRows(rows: SaleRow[]): { valid: SaleRow[]; errors: s
     if (result.success) {
       valid.push(row)
     } else {
-      const msg = result.error.errors[0]?.message ?? 'خطأ غير معروف'
+      const msg = result.error.issues[0]?.message ?? 'خطأ غير معروف'
       errors.push(`سطر ${i + 1} (${row.product_name || '—'}): ${msg}`)
     }
   })

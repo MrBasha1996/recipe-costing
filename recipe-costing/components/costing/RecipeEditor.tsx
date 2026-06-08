@@ -7,7 +7,7 @@ import { useCostingStore } from '@/stores/costingStore'
 import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
-import { calcServiceCost, FC_TARGET } from '@/lib/calculations'
+import { calcServiceCost, FC_TARGET, VAT_RATE } from '@/lib/calculations'
 import RecipeIdentityCard from '@/components/costing/RecipeIdentityCard'
 import RecipeCostBar from '@/components/costing/RecipeCostBar'
 import RecipeFoodTable from '@/components/costing/RecipeFoodTable'
@@ -15,6 +15,7 @@ import RecipePackageTable from '@/components/costing/RecipePackageTable'
 import RecipeChartsRow from '@/components/costing/RecipeChartsRow'
 import RecipePriceHistory from '@/components/costing/RecipePriceHistory'
 import RecipeHistory from '@/components/costing/RecipeHistory'
+import RecipeVersionDiff from '@/components/costing/RecipeVersionDiff'
 import { usePeriod } from '@/hooks/usePeriod'
 import { formatYearMonth } from '@/lib/period'
 import type { ComponentItem, RecipeIngredientRow, RecipeRowDraft, ServiceType, Recipe } from '@/types'
@@ -66,9 +67,11 @@ export default function RecipeEditor() {
   const [loading, setLoading] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
+  const [showVersionDiff, setShowVersionDiff] = useState(false)
   const [versions, setVersions] = useState<RecipeVersion[]>([])
   const [creatingVersion, setCreatingVersion] = useState(false)
   const [approving, setApproving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const { isCurrentClosed, currentYM } = usePeriod()
 
@@ -155,40 +158,43 @@ export default function RecipeEditor() {
           service_type: r.service_type ?? 'both',
         }))
 
-      // ── Refresh costs — run both lookups in parallel ──────────
+      // ── Refresh costs ─────────────────────────────────────────
       const rmSkus = [...new Set(draftRows.filter(r => !r.is_semi).map(r => r.ing_sku))]
       const btSkus = [...new Set(draftRows.filter(r =>  r.is_semi).map(r => r.ing_sku))]
       const priceMap = new Map<string, number>()
 
-      // Check cache for ingredient prices first
       const cachedPrices = qc.get<Record<string, number>>(cacheKey.ingPrices(brand as string))
-
       if (cachedPrices) {
         for (const [sku, cost] of Object.entries(cachedPrices)) priceMap.set(sku, cost)
-      } else {
-        // Fetch ingredients and batch costs in parallel
+      }
+
+      // جلب الأسعار المفقودة من الكاش فقط (أو كلها إذا لا يوجد كاش)
+      const missingRmSkus = rmSkus.filter(s => !priceMap.has(s))
+      const missingBtSkus = btSkus.filter(s => !priceMap.has(s))
+
+      if (missingRmSkus.length > 0 || missingBtSkus.length > 0) {
         const [ingResult, btResult] = await Promise.all([
-          rmSkus.length > 0
-            ? (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand as string).in('sku', rmSkus)
+          missingRmSkus.length > 0
+            ? (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand as string).in('sku', missingRmSkus)
             : Promise.resolve({ data: [] }),
-          btSkus.length > 0
-            ? (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand as string).eq('is_active', true).in('sku', btSkus)
+          missingBtSkus.length > 0
+            ? (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand as string).eq('is_active', true).in('sku', missingBtSkus)
             : Promise.resolve({ data: [] }),
         ])
 
-        const priceSnapshot: Record<string, number> = {}
+        const updatedSnapshot: Record<string, number> = { ...(cachedPrices ?? {}) }
         for (const ing of (ingResult.data || []) as any[]) {
           priceMap.set(ing.sku, ing.cost)
-          priceSnapshot[ing.sku] = ing.cost
+          updatedSnapshot[ing.sku] = ing.cost
         }
         for (const r of (btResult.data || []) as any[]) {
           if (r.yield_portions > 0) {
             const cost = r.total_cost / r.yield_portions
             priceMap.set(r.sku, cost)
-            priceSnapshot[r.sku] = cost
+            updatedSnapshot[r.sku] = cost
           }
         }
-        qc.set(cacheKey.ingPrices(brand as string), priceSnapshot)
+        qc.set(cacheKey.ingPrices(brand as string), updatedSnapshot)
       }
 
       const updatedRows = draftRows.map(r => {
@@ -350,15 +356,16 @@ export default function RecipeEditor() {
     setSaving(true)
     try {
       const supabase = createClient()
-      // Deactivate all versions for this product
+      // Activate current version FIRST — ensures product is never left with zero active versions
+      await (supabase.from('recipes') as any)
+        .update({ is_active: true })
+        .eq('id', savedRecipe.id)
+      // Deactivate all other versions for this product
       await (supabase.from('recipes') as any)
         .update({ is_active: false })
         .eq('sku', currentProduct.sku)
         .eq('brand_id', brand as string)
-      // Activate current version
-      await (supabase.from('recipes') as any)
-        .update({ is_active: true })
-        .eq('id', savedRecipe.id)
+        .neq('id', savedRecipe.id)
       await loadVersions()
       setSaveMsg({ ok: true, text: 'تم تفعيل هذا الإصدار ✓' })
     } catch (e: any) {
@@ -389,6 +396,41 @@ export default function RecipeEditor() {
       setSaveMsg({ ok: false, text: `خطأ: ${e.message}` })
     } finally {
       setApproving(false)
+    }
+  }
+
+  async function handleDeleteVersion() {
+    if (!savedRecipe || !currentProduct) return
+    if (!window.confirm(`هل تريد حذف إصدار ${savedRecipe.version}؟ لا يمكن التراجع.`)) return
+    setDeleting(true)
+    setSaveMsg(null)
+    try {
+      const supabase = createClient()
+      await (supabase.from('recipe_ingredients') as any).delete().eq('recipe_id', savedRecipe.id)
+      const { error } = await (supabase.from('recipes') as any).delete().eq('id', savedRecipe.id)
+      if (error) throw error
+
+      qc.bustPrefix(cacheKey.recipes(brand as string))
+      await loadVersions()
+
+      // بعد الحذف: حمّل الإصدار النشط إن وجد، وإلا أعد التهيئة
+      const remaining = versions.filter(v => v.id !== savedRecipe.id)
+      if (remaining.length > 0) {
+        const active = remaining.find(v => v.is_active) ?? remaining[0]
+        await loadRecipe(active.id)
+      } else {
+        setSavedRecipe(null)
+        setRows([])
+        setSellPrice(currentProduct.price)
+        setAppPrice(currentProduct.app_price)
+        setYieldPortions(1)
+        setDirty(false)
+      }
+      setSaveMsg({ ok: true, text: 'تم حذف الإصدار ✓' })
+    } catch (e: any) {
+      setSaveMsg({ ok: false, text: `خطأ: ${e.message}` })
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -475,7 +517,7 @@ export default function RecipeEditor() {
       }
 
       const appFcPct = appPrice && appPrice > 0
-        ? (diResult.perPortionCost / (appPrice / 1.15)) * 100
+        ? (diResult.perPortionCost / (appPrice / VAT_RATE)) * 100
         : null
 
       await (supabase.from('audit_logs') as any).insert({
@@ -566,7 +608,7 @@ export default function RecipeEditor() {
       <SimpleRecipeView
         productName={currentProduct.name}
         sku={currentProduct.sku}
-        isSemi={currentProduct.is_semi}
+        isSemi={!!currentProduct.is_semi}
         yieldPortions={yieldPortions}
         brandName={brand === 'ti' ? 'Three In' : 'باب البلد'}
         version={savedRecipe?.version ?? null}
@@ -808,7 +850,7 @@ export default function RecipeEditor() {
         <KitchenPrintView
           productName={currentProduct.name}
           sku={currentProduct.sku}
-          isSemi={currentProduct.is_semi}
+          isSemi={!!currentProduct.is_semi}
           yieldPortions={yieldPortions}
           brandName={brand === 'ti' ? 'Three In' : 'باب البلد'}
           version={savedRecipe?.version ?? null}
@@ -890,6 +932,17 @@ export default function RecipeEditor() {
               </select>
             )}
 
+            {/* Delete version button — only for non-approved versions */}
+            {canE && savedRecipe && !isApproved && (
+              <button
+                onClick={handleDeleteVersion}
+                disabled={deleting || saving}
+                className="text-xs px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 rounded-lg transition-colors disabled:opacity-50"
+              >
+                {deleting ? '...' : '🗑 حذف'}
+              </button>
+            )}
+
             {/* Approve button — shown after save, accountant only, not yet approved */}
             {canApprove && savedRecipe && !isApproved && !dirty && (
               <button
@@ -936,6 +989,14 @@ export default function RecipeEditor() {
             >
               📊 السجل
             </button>
+            {versions.length >= 2 && (
+              <button
+                onClick={() => setShowVersionDiff(true)}
+                className="text-xs px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg transition-colors"
+              >
+                ⇄ مقارنة الإصدارات
+              </button>
+            )}
             <button
               onClick={() => printService('di')}
               className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
@@ -1107,6 +1168,14 @@ export default function RecipeEditor() {
         ingSkus={ingSkus}
       />
 
+      <RecipeVersionDiff
+        open={showVersionDiff}
+        onClose={() => setShowVersionDiff(false)}
+        versions={versions as any}
+        brand={brand as import('@/types').BrandId}
+        productName={currentProduct.name}
+      />
+
     </>
   )
 }
@@ -1168,7 +1237,7 @@ function PrintTable({ rows, canSeeP }: { rows: RecipeRowDraft[]; canSeeP: boolea
           </tr>
           <tr style={{ background: '#1a3a4a', color: 'white' }}>
             <td colSpan={cols - 1} style={{ padding: '5px 8px', fontWeight: '600', fontSize: '9px' }}>الإجمالي شامل ض.ق.م 15%</td>
-            <td style={{ textAlign: 'center', padding: '5px 8px', fontFamily: 'monospace', fontWeight: '700' }}>{(subtotal * 1.15).toFixed(3)}</td>
+            <td style={{ textAlign: 'center', padding: '5px 8px', fontFamily: 'monospace', fontWeight: '700' }}>{(subtotal * VAT_RATE).toFixed(3)}</td>
           </tr>
         </tfoot>
       )}

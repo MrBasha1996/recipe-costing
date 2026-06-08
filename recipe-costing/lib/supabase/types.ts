@@ -34,17 +34,39 @@ export type Database = {
           created_at?: string
         }
       }
+      batches: {
+        Row: {
+          sku: string
+          brand_id: string
+          name: string
+          unit: string
+          created_at: string
+        }
+        Insert: {
+          sku: string
+          brand_id: string
+          name: string
+          unit?: string
+          created_at?: string
+        }
+        Update: {
+          sku?: string
+          brand_id?: string
+          name?: string
+          unit?: string
+          created_at?: string
+        }
+      }
       products: {
         Row: {
           sku: string
           brand_id: string
           name: string
-          category: 'Meal' | 'Batch'
+          category: 'Meal'
           price: number
           app_price: number | null
           app_sku: string | null
           unit: string | null
-          is_semi: boolean
           is_base: boolean
           created_at: string
         }
@@ -52,12 +74,11 @@ export type Database = {
           sku: string
           brand_id: string
           name: string
-          category: 'Meal' | 'Batch'
+          category?: 'Meal'
           price?: number
           app_price?: number | null
           app_sku?: string | null
           unit?: string | null
-          is_semi?: boolean
           is_base?: boolean
           created_at?: string
         }
@@ -65,12 +86,11 @@ export type Database = {
           sku?: string
           brand_id?: string
           name?: string
-          category?: 'Meal' | 'Batch'
+          category?: 'Meal'
           price?: number
           app_price?: number | null
           app_sku?: string | null
           unit?: string | null
-          is_semi?: boolean
           is_base?: boolean
           created_at?: string
         }
@@ -228,6 +248,35 @@ export type Database = {
           new_price?: number
           changed_by?: string | null
           changed_at?: string
+        }
+      }
+      suppliers: {
+        Row: {
+          id: string
+          brand_id: string
+          name: string
+          phone: string | null
+          contact_person: string | null
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          brand_id: string
+          name: string
+          phone?: string | null
+          contact_person?: string | null
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          brand_id?: string
+          name?: string
+          phone?: string | null
+          contact_person?: string | null
+          notes?: string | null
+          created_at?: string
         }
       }
       audit_logs: {

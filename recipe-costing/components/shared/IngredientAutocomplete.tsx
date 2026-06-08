@@ -87,14 +87,11 @@ export default function IngredientAutocomplete({ onSelect, placeholder = 'أضف
         .ilike('name', `%${q}%`)
         .order('name')
         .limit(20),
-      // Search ALL batch products (even those without a saved recipe)
-      (supabase.from('products') as any)
+      (supabase.from('batches') as any)
         .select('sku, name, unit')
         .eq('brand_id', brand as string)
-        .eq('is_semi', true)
         .ilike('name', `%${q}%`)
         .limit(10),
-      // Get saved recipe costs for batch products
       (supabase.from('recipes') as any)
         .select('sku, yield_portions, total_cost')
         .eq('brand_id', brand as string)

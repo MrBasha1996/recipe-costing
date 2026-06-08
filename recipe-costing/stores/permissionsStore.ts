@@ -41,7 +41,7 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
 
       // Fetch permissions and modules separately to avoid PostgREST join issues
       const { data: rp } = await (supabase.from('role_permissions') as any)
-        .select('module_id, can_view, can_create, can_update, can_delete, can_approve, can_import, can_edit_price')
+        .select('module_id, can_view, can_create, can_update, can_delete, can_approve, can_import, can_edit_price, can_post, can_print, can_export')
         .eq('role_id', profile.role_id)
 
       const moduleIds = ((rp || []) as any[]).map((r: any) => r.module_id).filter(Boolean)
@@ -67,6 +67,9 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
             can_approve:    row.can_approve    ?? false,
             can_import:     row.can_import     ?? false,
             can_edit_price: row.can_edit_price ?? false,
+            can_post:       row.can_post       ?? false,
+            can_print:      row.can_print      ?? false,
+            can_export:     row.can_export     ?? false,
           }
         }
       }
@@ -102,6 +105,9 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
       case 'approve':    return p.can_approve
       case 'import':     return p.can_import
       case 'edit_price': return p.can_edit_price
+      case 'post':       return p.can_post
+      case 'print':      return p.can_print
+      case 'export':     return p.can_export
     }
   },
 

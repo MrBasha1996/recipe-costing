@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import type { Product, BrandId, ProductCategory } from '@/types'
+import type { Product, BrandId } from '@/types'
 
 interface Props {
   brand: BrandId
@@ -15,17 +15,11 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
   const isEdit = !!product
   const [name, setName] = useState(product?.name ?? '')
   const [sku, setSku] = useState(product?.sku ?? '')
-  const [category, setCategory] = useState<ProductCategory>(product?.category ?? 'Meal')
   const [price, setPrice] = useState(product?.price?.toString() ?? '0')
   const [appPrice, setAppPrice] = useState(product?.app_price?.toString() ?? '')
   const [hasApp, setHasApp] = useState(!!product?.app_price)
-  const [unit, setUnit] = useState(product?.unit ?? '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (category === 'Batch') { setHasApp(false); setPrice('0') }
-  }, [category])
 
   async function handleSave() {
     if (!name.trim() || !sku.trim()) { setError('الاسم والـ SKU مطلوبان'); return }
@@ -36,11 +30,10 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
       sku: sku.trim(),
       brand_id: brand as string,
       name: name.trim(),
-      category,
-      price: category === 'Batch' ? 0 : parseFloat(price) || 0,
+      category: 'Meal' as const,
+      price: parseFloat(price) || 0,
       app_price: hasApp && appPrice ? parseFloat(appPrice) : null,
-      unit: category === 'Batch' ? (unit || 'كيلو') : null,
-      is_semi: category === 'Batch',
+      unit: null,
       is_base: false,
     }
 
@@ -65,24 +58,6 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
         </div>
 
         <div className="p-6 space-y-4">
-          {/* Category */}
-          <div>
-            <label className="block text-xs text-gray-500 mb-1">النوع</label>
-            <div className="flex gap-2">
-              {(['Meal', 'Batch'] as ProductCategory[]).map(c => (
-                <button
-                  key={c}
-                  onClick={() => setCategory(c)}
-                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    category === c ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >
-                  {c === 'Meal' ? 'Meal — منتج نهائي' : 'Batch — وسيط'}
-                </button>
-              ))}
-            </div>
-          </div>
-
           {/* Name */}
           <div>
             <label className="block text-xs text-gray-500 mb-1">الاسم</label>
@@ -107,59 +82,42 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
             />
           </div>
 
-          {/* Price — Meal only */}
-          {category === 'Meal' && (
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">السعر (ريال)</label>
+          {/* Price */}
+          <div>
+            <label className="block text-xs text-gray-500 mb-1">السعر (ريال)</label>
+            <input
+              type="number"
+              value={price}
+              onChange={e => setPrice(e.target.value)}
+              min="0" step="0.5"
+              dir="ltr"
+              className={`${inputCls} font-mono`}
+            />
+          </div>
+
+          {/* APP Price */}
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={hasApp}
+                onChange={e => setHasApp(e.target.checked)}
+                className="w-4 h-4 rounded accent-blue-500"
+              />
+              <span className="text-sm text-gray-700">متوفر على التطبيق بسعر مختلف</span>
+            </label>
+            {hasApp && (
               <input
                 type="number"
-                value={price}
-                onChange={e => setPrice(e.target.value)}
+                value={appPrice}
+                onChange={e => setAppPrice(e.target.value)}
+                placeholder="سعر التطبيق"
                 min="0" step="0.5"
                 dir="ltr"
-                className={`${inputCls} font-mono`}
+                className={`${inputCls} font-mono border-blue-400`}
               />
-            </div>
-          )}
-
-          {/* Unit — Batch only */}
-          {category === 'Batch' && (
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">الوحدة</label>
-              <input
-                value={unit}
-                onChange={e => setUnit(e.target.value)}
-                placeholder="كيلو / لتر / حصة"
-                className={inputCls}
-              />
-            </div>
-          )}
-
-          {/* APP Price — Meal only */}
-          {category === 'Meal' && (
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={hasApp}
-                  onChange={e => setHasApp(e.target.checked)}
-                  className="w-4 h-4 rounded accent-blue-500"
-                />
-                <span className="text-sm text-gray-700">متوفر على التطبيق بسعر مختلف</span>
-              </label>
-              {hasApp && (
-                <input
-                  type="number"
-                  value={appPrice}
-                  onChange={e => setAppPrice(e.target.value)}
-                  placeholder="سعر التطبيق"
-                  min="0" step="0.5"
-                  dir="ltr"
-                  className={`${inputCls} font-mono border-blue-400`}
-                />
-              )}
-            </div>
-          )}
+            )}
+          </div>
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-3 py-2">

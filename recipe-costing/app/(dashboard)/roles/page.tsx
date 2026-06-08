@@ -130,7 +130,7 @@ export default function RolesPage() {
   // ── Permissions change with inheritance ───────────────────────
   function handlePermChange(moduleCode: string, action: PermissionAction, value: boolean) {
     setPermState(prev => {
-      const current = prev[moduleCode] ?? { can_view: false, can_create: false, can_update: false, can_delete: false, can_approve: false, can_import: false, can_edit_price: false }
+      const current = prev[moduleCode] ?? { can_view: false, can_create: false, can_update: false, can_delete: false, can_approve: false, can_import: false, can_edit_price: false, can_post: false, can_print: false, can_export: false }
       return { ...prev, [moduleCode]: applyInheritance(current, action, value) }
     })
     setPermsDirty(true)
@@ -152,6 +152,9 @@ export default function RolesPage() {
         can_approve:    p.can_approve    ?? false,
         can_import:     p.can_import     ?? false,
         can_edit_price: p.can_edit_price ?? false,
+        can_post:       p.can_post       ?? false,
+        can_print:      p.can_print      ?? false,
+        can_export:     p.can_export     ?? false,
       })).filter(r => r.module_id)
 
       const { error } = await (supabase.from('role_permissions') as any)

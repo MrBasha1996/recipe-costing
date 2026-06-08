@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useBrandStore } from '@/stores/brandStore'
+import { VAT_RATE } from '@/lib/calculations'
 
 interface SaleRecord {
   id: string
@@ -92,7 +93,7 @@ export default function SalesBatchDetailPage() {
             </div>
             <div className="bg-white border border-gray-200 rounded-xl p-4">
               <div className="text-xs text-gray-400 mb-1">قبل VAT</div>
-              <div className="text-xl font-bold font-mono text-blue-700">{(totalRevenue / 1.15).toFixed(2)} ر.س</div>
+              <div className="text-xl font-bold font-mono text-blue-700">{(totalRevenue / VAT_RATE).toFixed(2)} ر.س</div>
             </div>
             <div className="bg-white border border-gray-200 rounded-xl p-4">
               <div className="text-xs text-gray-400 mb-1">إجمالي الوجبات</div>

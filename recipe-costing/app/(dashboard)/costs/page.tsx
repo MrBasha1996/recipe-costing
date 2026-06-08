@@ -103,6 +103,39 @@ export default function CostsPage() {
   const totalLabor = labor.reduce((s, r) => s + r.amount, 0)
   const totalOverhead = overhead.reduce((s, r) => s + r.amount, 0)
 
+  const [copying, setCopying] = useState(false)
+  const [copyMsg, setCopyMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  function prevMonth(ym: string): string {
+    const [y, m] = ym.split('-').map(Number)
+    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`
+  }
+
+  async function copyFromPrev() {
+    setCopying(true); setCopyMsg(null)
+    const supabase = createClient()
+    const prev = prevMonth(month)
+    const [{ data: prevLabor }, { data: prevOv }] = await Promise.all([
+      (supabase.from('labor_costs') as any).select('description, amount').eq('brand_id', brand).eq('month', prev),
+      (supabase.from('overhead_costs') as any).select('category, description, amount').eq('brand_id', brand).eq('month', prev),
+    ])
+    if ((!prevLabor?.length && !prevOv?.length)) {
+      setCopyMsg({ ok: false, text: 'لا توجد بنود في الشهر السابق للنسخ منه' })
+      setCopying(false); return
+    }
+    await Promise.all([
+      prevLabor?.length ? (supabase.from('labor_costs') as any).insert(
+        prevLabor.map((r: any) => ({ brand_id: brand, month, description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
+      ) : Promise.resolve(),
+      prevOv?.length ? (supabase.from('overhead_costs') as any).insert(
+        prevOv.map((r: any) => ({ brand_id: brand, month, category: r.category, description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
+      ) : Promise.resolve(),
+    ])
+    await Promise.all([loadLabor(), loadOverhead()])
+    setCopyMsg({ ok: true, text: `تم نسخ ${(prevLabor?.length ?? 0) + (prevOv?.length ?? 0)} بند من ${formatYearMonth(prev)} ✓` })
+    setCopying(false)
+  }
+
   const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
 
   return (
@@ -113,16 +146,29 @@ export default function CostsPage() {
           <h1 className="text-xl font-bold text-gray-900">التكاليف الشهرية</h1>
           <p className="text-gray-500 text-sm mt-0.5">تكاليف العمالة والتكاليف الثابتة</p>
         </div>
-        <select
-          value={month}
-          onChange={e => setMonth(e.target.value)}
-          className={inputCls}
-        >
-          {months.map(m => (
-            <option key={m} value={m}>{formatYearMonth(m)}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-3 flex-wrap">
+          {totalLabor === 0 && totalOverhead === 0 && (
+            <button onClick={copyFromPrev} disabled={copying}
+              className="text-sm px-4 py-2 bg-emerald-50 border border-emerald-300 text-emerald-700 rounded-lg hover:bg-emerald-100 font-medium disabled:opacity-40 transition-colors whitespace-nowrap">
+              {copying ? 'جارٍ النسخ...' : '📋 نسخ من الشهر السابق'}
+            </button>
+          )}
+          <select
+            value={month}
+            onChange={e => { setMonth(e.target.value); setCopyMsg(null) }}
+            className={inputCls}
+          >
+            {months.map(m => (
+              <option key={m} value={m}>{formatYearMonth(m)}</option>
+            ))}
+          </select>
+        </div>
       </div>
+      {copyMsg && (
+        <div className={`rounded-lg px-4 py-2.5 text-sm border ${copyMsg.ok ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {copyMsg.text}
+        </div>
+      )}
 
       {/* Summary cards */}
       <div className="grid grid-cols-3 gap-4">

@@ -2,6 +2,7 @@ import type { RecipeRowDraft, FoodCostResult, ServiceType } from '@/types'
 
 export type { ServiceType }
 
+export const VAT_RATE  = 1.15
 export const FC_TARGET = 35
 
 /**
@@ -44,8 +45,8 @@ export function calcServiceCost(
   )
   const portions = Math.max(yieldPortions, 1)
   const perPortionCost = totalCost / portions
-  const sellPriceExVat = sellPrice / 1.15
-  const appPriceExVat = appPrice != null ? appPrice / 1.15 : null
+  const sellPriceExVat = sellPrice / VAT_RATE
+  const appPriceExVat = appPrice != null ? appPrice / VAT_RATE : null
   const foodCostPct = sellPriceExVat > 0 ? (perPortionCost / sellPriceExVat) * 100 : 0
   const margin = sellPriceExVat - perPortionCost
   const marginApp = appPriceExVat != null ? appPriceExVat - perPortionCost : null

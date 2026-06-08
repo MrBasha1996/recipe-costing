@@ -1,142 +1,92 @@
-'use client'
-
-import { useEffect, useState, useCallback } from 'react'
-import { createClient } from '@/lib/supabase/client'
-import { useBrandStore } from '@/stores/brandStore'
-import { FC_TARGET } from '@/lib/calculations'
-import { qc, cacheKey } from '@/lib/queryCache'
-import KPICards from '@/components/dashboard/KPICards'
-import FCDistributionChart from '@/components/dashboard/FCDistributionChart'
-import Top10Chart from '@/components/dashboard/Top10Chart'
-import OverTargetTable from '@/components/dashboard/OverTargetTable'
-import { exportRecipesExcel } from '@/lib/excel'
+import { getServerBrand } from '@/lib/server-brand'
+import { createClient } from '@/lib/supabase/server'
+import DashboardClient from './DashboardClient'
+import { VAT_RATE } from '@/lib/calculations'
 import type { Recipe } from '@/types'
 
-export default function DashboardPage() {
-  const { brand } = useBrandStore()
-  const [recipes, setRecipes] = useState<Recipe[]>([])
-  const [loading, setLoading] = useState(true)
-  const [exporting, setExporting] = useState(false)
+export default async function DashboardPage() {
+  const brand    = await getServerBrand()
+  const supabase = await createClient()
 
-  const load = useCallback(async () => {
-    const rk = cacheKey.recipes(brand)
-    const cached = qc.get<Recipe[]>(rk)
-    if (cached) { setRecipes(cached); setLoading(false); return }
+  const toLocal = (offset: number) => new Date(Date.now() + offset).toLocaleDateString('en-CA')
+  const todayStr      = toLocal(0)
+  const yesterdayStr  = toLocal(-86400000)
+  const lastWkSameDay = toLocal(-8 * 86400000)
+  const weekAgoStr    = toLocal(-7 * 86400000)
+  const in3Str        = toLocal(3 * 86400000)
 
-    setLoading(true)
-    const supabase = createClient()
-    const { data } = await (supabase.from('recipes') as any)
-      .select('*')
-      .eq('brand_id', brand as string)
-      .order('food_cost_pct', { ascending: false })
-    const recipes = (data as Recipe[]) || []
-    qc.set(rk, recipes)
-    setRecipes(recipes)
-    setLoading(false)
-  }, [brand])
+  const [
+    { data: brandRow },
+    { data: recipes },
+    { data: salesYest },
+    { data: salesLastWk },
+    { data: sales7d },
+    { data: stockItems },
+    { data: ings },
+    { data: batchProds },
+    { data: wasteLogs },
+    { data: recipesFC },
+  ] = await Promise.all([
+    (supabase.from('brands') as any).select('fc_target_low, fc_target_high').eq('id', brand).single(),
+    (supabase.from('recipes') as any).select('*').eq('brand_id', brand as string).order('food_cost_pct', { ascending: false }),
+    (supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue').eq('brand_id', brand).eq('sale_date', yesterdayStr),
+    (supabase.from('daily_sales') as any).select('qty_sold, revenue').eq('brand_id', brand).eq('sale_date', lastWkSameDay),
+    (supabase.from('daily_sales') as any).select('product_sku, revenue').eq('brand_id', brand).gte('sale_date', weekAgoStr).lte('sale_date', yesterdayStr),
+    (supabase.from('stock_items') as any).select('ing_sku, ing_name, current_qty, min_qty, expiry_date').eq('brand_id', brand),
+    (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
+    (supabase.from('products') as any).select('sku, price').eq('brand_id', brand).or('is_semi.eq.true,category.eq.Batch'),
+    (supabase.from('waste_log') as any).select('value').eq('brand_id', brand).gte('log_date', weekAgoStr),
+    (supabase.from('recipes') as any).select('sku, food_cost_pct').eq('brand_id', brand).eq('is_active', true),
+  ])
 
-  useEffect(() => { load() }, [load])
+  const fcLow  = (brandRow as any)?.fc_target_low  ?? 35
+  const fcHigh = (brandRow as any)?.fc_target_high ?? 45
 
-  async function handleExport() {
-    setExporting(true)
-    try {
-      const supabase = createClient()
+  // Ops calculations
+  const revYest   = ((salesYest  || []) as any[]).reduce((s, r) => s + r.revenue, 0) / VAT_RATE
+  const qtyYest   = ((salesYest  || []) as any[]).reduce((s, r) => s + r.qty_sold, 0)
+  const revLastWk = ((salesLastWk|| []) as any[]).reduce((s, r) => s + r.revenue, 0) / VAT_RATE
+  const qtyLastWk = ((salesLastWk|| []) as any[]).reduce((s, r) => s + r.qty_sold, 0)
 
-      // Load recipe ingredients for all recipes
-      const [{ data: recipeIngs }, { data: history }] = await Promise.all([
-        (supabase.from('recipe_ingredients') as any)
-          .select('*, recipes!inner(sku, product_name, brand_id)')
-          .eq('recipes.brand_id', brand as string),
-        (supabase.from('price_history') as any)
-          .select('*')
-          .eq('brand_id', brand as string)
-          .order('changed_at', { ascending: false })
-          .limit(500),
-      ])
-
-      const ingExport = ((recipeIngs as any[]) || []).map((ri: any) => ({
-        recipe_sku: ri.recipes?.sku ?? '',
-        recipe_name: ri.recipes?.product_name ?? '',
-        ing_sku: ri.ing_sku,
-        ing_name: ri.ing_name,
-        qty: ri.qty,
-        unit: ri.unit,
-        unit_cost: ri.unit_cost,
-        yield_pct: ri.yield_pct,
-        line_cost: ri.qty > 0 && ri.yield_pct > 0
-          ? (ri.qty / (ri.yield_pct / 100)) * ri.unit_cost
-          : 0,
-      }))
-
-      await exportRecipesExcel(recipes, ingExport, (history as any[]) || [])
-    } finally {
-      setExporting(false)
-    }
+  const recipeMap = new Map<string, number>()
+  for (const r of (recipesFC || []) as any[]) recipeMap.set(r.sku, r.food_cost_pct)
+  let totalRev7 = 0, totalCost7 = 0
+  for (const s of (sales7d || []) as any[]) {
+    const fc = recipeMap.get(s.product_sku); if (fc == null) continue
+    const rev = s.revenue / VAT_RATE; totalRev7 += rev; totalCost7 += rev * (fc / 100)
   }
+  const fcWeek = totalRev7 > 0 ? (totalCost7 / totalRev7) * 100 : 0
 
-  const avgFC = recipes.length
-    ? recipes.reduce((s, r) => s + r.food_cost_pct, 0) / recipes.length
-    : 0
-  const overTarget = recipes.filter(r => r.food_cost_pct > FC_TARGET)
-  const avgMargin = recipes.length
-    ? recipes.reduce((s, r) => s + r.margin, 0) / recipes.length
-    : 0
+  const costMap = new Map<string, number>()
+  for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost)
+  for (const b of (batchProds || []) as any[]) costMap.set(b.sku, b.price)
+  const batchSkus = new Set((batchProds || []).map((b: any) => b.sku as string))
 
-  const distribution = [
-    { range: '0–25%',  count: recipes.filter(r => r.food_cost_pct < 25).length,                                   color: '#22c55e' },
-    { range: '25–30%', count: recipes.filter(r => r.food_cost_pct >= 25 && r.food_cost_pct < 30).length,          color: '#86efac' },
-    { range: '30–35%', count: recipes.filter(r => r.food_cost_pct >= 30 && r.food_cost_pct < 35).length,          color: '#fbbf24' },
-    { range: '35–40%', count: recipes.filter(r => r.food_cost_pct >= 35 && r.food_cost_pct < 40).length,          color: '#f97316' },
-    { range: '40–45%', count: recipes.filter(r => r.food_cost_pct >= 40 && r.food_cost_pct < 45).length,          color: '#ef4444' },
-    { range: '45%+',   count: recipes.filter(r => r.food_cost_pct >= 45).length,                                   color: '#7f1d1d' },
-  ]
+  const stocks = (stockItems || []) as any[]
+  const lowStockCount   = stocks.filter(s => s.min_qty > 0 && s.current_qty > 0 && s.current_qty <= s.min_qty).length
+  const emptyStockCount = stocks.filter(s => s.min_qty > 0 && s.current_qty <= 0).length
+  const expiringCount   = stocks.filter(s => s.expiry_date && s.expiry_date > todayStr && s.expiry_date <= in3Str && s.current_qty > 0).length
+  const expiredCount    = stocks.filter(s => s.expiry_date && s.expiry_date < todayStr && s.current_qty > 0).length
+  const inventoryValue  = stocks.reduce((sum, s) => sum + s.current_qty * (costMap.get(s.ing_sku) ?? 0), 0)
+  const batchesLow      = stocks.filter(s => batchSkus.has(s.ing_sku) && s.current_qty <= 0)
+    .map(s => ({ ing_sku: s.ing_sku, ing_name: s.ing_name, current_qty: s.current_qty }))
+  const wasteValue7d = ((wasteLogs || []) as any[]).reduce((s, r) => s + (r.value ?? 0), 0)
 
-  const top10 = recipes.slice(0, 10)
+  const pMap = new Map<string, { name: string; qty: number; revenue: number }>()
+  for (const s of (salesYest || []) as any[]) {
+    const ex = pMap.get(s.product_sku)
+    if (ex) { ex.qty += s.qty_sold; ex.revenue += s.revenue }
+    else pMap.set(s.product_sku, { name: s.product_name, qty: s.qty_sold, revenue: s.revenue })
+  }
+  const top5 = [...pMap.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 5).map(p => ({ ...p, revenue: p.revenue / VAT_RATE }))
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">لوحة التحكم</h1>
-          <p className="text-gray-500 text-sm mt-0.5">
-            {loading ? 'جارٍ التحميل...' : `${recipes.length} وصفة محفوظة`}
-          </p>
-        </div>
-        <button
-          onClick={handleExport}
-          disabled={exporting || recipes.length === 0}
-          className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-        >
-          {exporting ? 'جارٍ التصدير...' : '⬇ تصدير Excel'}
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="flex items-center justify-center h-48 text-gray-400">جارٍ التحميل...</div>
-      ) : recipes.length === 0 ? (
-        <div className="flex items-center justify-center h-48 text-gray-500 text-sm">
-          لا توجد وصفات محفوظة — ابدأ بحفظ وصفة من صفحة الوصفات
-        </div>
-      ) : (
-        <>
-          <KPICards
-            avgFC={avgFC}
-            overTargetCount={overTarget.length}
-            totalRecipes={recipes.length}
-            avgMargin={avgMargin}
-          />
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <FCDistributionChart data={distribution} />
-            <Top10Chart recipes={top10} />
-          </div>
-
-          {overTarget.length > 0 && (
-            <OverTargetTable recipes={overTarget} />
-          )}
-        </>
-      )}
-    </div>
+    <DashboardClient
+      recipes={(recipes as Recipe[]) ?? []}
+      opsData={{ revYest, qtyYest, revLastWeek: revLastWk, qtyLastWeek: qtyLastWk, fcWeek, lowStockCount, emptyStockCount, expiringCount, expiredCount, inventoryValue, wasteValue7d, top5, batchesLow, fetchedAt: new Date().toISOString() }}
+      brand={brand}
+      fcLow={fcLow}
+      fcHigh={fcHigh}
+    />
   )
 }

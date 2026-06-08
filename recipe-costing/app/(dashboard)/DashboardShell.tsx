@@ -11,7 +11,9 @@ import BrandSelectorOverlay from '@/components/BrandSelectorOverlay'
 import type { UserProfile, BrandId } from '@/types'
 
 const NAV_ITEMS = [
+  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   href: '/dashboard' },
   { key: 'costing',     icon: '📋', label: 'الوصفات',       href: '/costing' },
+  { key: 'batches',     icon: '⚙', label: 'الباتشات',      href: '/batches' },
   { key: 'products',    icon: '🛍', label: 'المنتجات',      href: '/products' },
   { key: 'ingredients', icon: '🥗', label: 'المواد الخام',  href: '/ingredients' },
   { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     href: '/purchasing' },
@@ -21,13 +23,22 @@ const NAV_ITEMS = [
   { key: 'reports',     icon: '📊', label: 'التقارير',      href: '/reports' },
   { key: 'comparison',  icon: '↔️', label: 'مقارنة',        href: '/comparison' },
   { key: 'inventory',   icon: '📦', label: 'المخزون',       href: '/inventory' },
-  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   href: '/dashboard' },
+  { key: 'production',  icon: '⚙️', label: 'الإنتاج',       href: '/production' },
+  { key: 'suppliers',   icon: '🏭', label: 'الموردون',      href: '/suppliers' },
   { key: 'users',       icon: '👥', label: 'المستخدمون',    href: '/users' },
   { key: 'roles',       icon: '🔐', label: 'المجموعات',     href: '/roles' },
   { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     href: '/settings' },
 ]
 
 const SIDEBAR_W = 260
+
+// ── Alerts ────────────────────────────────────────────────────────
+type AlertType = 'empty' | 'low' | 'expired' | 'expiring'
+interface Alert { type: AlertType; sku: string; name: string; detail: string }
+
+const ALERT_ICON:  Record<AlertType, string> = { empty: '🔴', low: '🟡', expired: '🔴', expiring: '🟠' }
+const ALERT_LABEL: Record<AlertType, string> = { empty: 'نفد المخزون', low: 'منخفض', expired: 'منتهي الصلاحية', expiring: 'يقترب الانتهاء' }
+const ALERT_COLOR: Record<AlertType, string> = { empty: 'text-red-600', low: 'text-amber-600', expired: 'text-red-600', expiring: 'text-orange-600' }
 
 export default function DashboardShell({
   profile,
@@ -43,6 +54,8 @@ export default function DashboardShell({
   const [mounted, setMounted] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [showSelector, setShowSelector] = useState(false)
+  const [showAlerts, setShowAlerts] = useState(false)
+  const [alerts, setAlerts] = useState<Alert[]>([])
 
   const hasMultiBrand = profile.brand_access === 'all'
 
@@ -71,15 +84,50 @@ export default function DashboardShell({
     }
   }, [mounted, hasMultiBrand, brandPicked])
 
+  // تحميل الإنذارات وتجديدها كل دقيقتين
+  useEffect(() => {
+    if (!mounted) return
+    const activeBrand = useBrandStore.getState().brand
+    if (!activeBrand) return
+    loadAlerts(activeBrand)
+    const interval = setInterval(() => loadAlerts(activeBrand), 120000)
+    return () => clearInterval(interval)
+  }, [mounted, brand])
+
   function handleBrandPick(b: BrandId) {
     pickBrand(b)
     setShowSelector(false)
+    router.refresh()
   }
 
   async function handleLogout() {
     const supabase = createClient()
     await supabase.auth.signOut()
     router.push('/login')
+  }
+
+  async function loadAlerts(brandId: string) {
+    const supabase = createClient()
+    const todayStr = new Date().toLocaleDateString('en-CA')
+    const in3Str   = new Date(Date.now() + 3 * 86400000).toLocaleDateString('en-CA')
+    const { data: stocks } = await (supabase.from('stock_items') as any)
+      .select('ing_sku, ing_name, current_qty, min_qty, expiry_date')
+      .eq('brand_id', brandId)
+    if (!stocks?.length) return
+    const newAlerts: Alert[] = []
+    for (const s of stocks as any[]) {
+      if (s.min_qty > 0 && s.current_qty <= 0)
+        newAlerts.push({ type: 'empty',   sku: s.ing_sku, name: s.ing_name, detail: 'المخزون صفر' })
+      else if (s.min_qty > 0 && s.current_qty <= s.min_qty)
+        newAlerts.push({ type: 'low',     sku: s.ing_sku, name: s.ing_name, detail: `${s.current_qty.toFixed(2)} (الحد: ${s.min_qty})` })
+      if (s.expiry_date && s.current_qty > 0) {
+        if (s.expiry_date < todayStr)
+          newAlerts.push({ type: 'expired',  sku: s.ing_sku, name: s.ing_name, detail: `انتهت ${s.expiry_date}` })
+        else if (s.expiry_date <= in3Str)
+          newAlerts.push({ type: 'expiring', sku: s.ing_sku, name: s.ing_name, detail: `تنتهي ${s.expiry_date}` })
+      }
+    }
+    setAlerts(newAlerts)
   }
 
   const { hasPermission, loaded: permLoaded, roleName } = usePermissionsStore()
@@ -279,6 +327,60 @@ export default function DashboardShell({
           </div>
 
           <div className="flex items-center gap-3">
+            {/* جرس الإنذارات */}
+            <div className="relative">
+              <button
+                onClick={() => setShowAlerts(v => !v)}
+                className="relative p-1.5 rounded-lg hover:bg-gray-100 transition-colors text-gray-500"
+                title="الإنذارات"
+              >
+                <span className="text-base">🔔</span>
+                {alerts.length > 0 && (
+                  <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-0.5 leading-none">
+                    {alerts.length > 99 ? '99+' : alerts.length}
+                  </span>
+                )}
+              </button>
+
+              {showAlerts && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setShowAlerts(false)} />
+                  <div className="absolute left-0 top-9 w-80 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
+                      <span className="font-semibold text-gray-900 text-sm">الإنذارات</span>
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${alerts.length > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+                        {alerts.length > 0 ? `${alerts.length} تنبيه` : 'لا تنبيهات'}
+                      </span>
+                    </div>
+                    <div className="max-h-80 overflow-y-auto">
+                      {alerts.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-green-600 text-sm">النظام سليم ✓</div>
+                      ) : (
+                        alerts.map((a, i) => (
+                          <Link key={i} href="/inventory" onClick={() => setShowAlerts(false)}
+                            className="flex items-start gap-3 px-4 py-3 border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors">
+                            <span className="text-base flex-shrink-0 mt-0.5">{ALERT_ICON[a.type]}</span>
+                            <div className="min-w-0">
+                              <div className="text-sm font-medium text-gray-900 truncate">{a.name}</div>
+                              <div className={`text-xs mt-0.5 ${ALERT_COLOR[a.type]}`}>{ALERT_LABEL[a.type]} — {a.detail}</div>
+                            </div>
+                          </Link>
+                        ))
+                      )}
+                    </div>
+                    {alerts.length > 0 && (
+                      <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50">
+                        <Link href="/inventory" onClick={() => setShowAlerts(false)}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                          عرض المخزون كاملاً →
+                        </Link>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
             <button
               onClick={() => hasMultiBrand && setShowSelector(true)}
               className="text-xs px-3 py-1 rounded-full font-semibold flex items-center gap-1.5 transition-all"

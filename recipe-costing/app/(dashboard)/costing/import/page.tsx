@@ -428,6 +428,8 @@ export default function RecipeImportPage() {
   function buildDrafts(result: ImportAnalysis, parsed: ParseResult): NewItemDraft[] {
     const seenSkus = new Set<string>()
     const drafts: NewItemDraft[] = []
+    // إذا ظهر الـ SKU كمنتج في الملف → يُعامَل باتش تلقائياً
+    const productSkusInFile = new Set(result.products.map(p => p.sku))
     for (const p of result.products) {
       for (const v of p.versions) {
         for (const sku of v.unknownSkus) {
@@ -438,7 +440,7 @@ export default function RecipeImportPage() {
             originalSku: sku,
             sku,
             name: ing?.ing_name ?? sku,
-            type: 'ingredient',
+            type: productSkusInFile.has(sku) ? 'batch' : 'ingredient',
             category: '',
             unit: ing?.unit ?? '',
             cost: 0,

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import type { RecipeRowDraft } from '@/types'
-import { calcRowCost } from '@/lib/calculations'
+import { calcRowCost, VAT_RATE } from '@/lib/calculations'
 import { C, MONO } from './theme'
 
 interface Props {
@@ -29,7 +29,7 @@ export default function RecipeCostBar({
   const foodPortion = foodTotal / portions
   const packPortion = packTotal / portions
   const totalPortion = foodPortion + packPortion
-  const priceExVat = sellPrice / 1.15
+  const priceExVat = sellPrice / VAT_RATE
   const margin = priceExVat - totalPortion
 
   const base = priceExVat > 0 ? priceExVat : totalPortion

@@ -287,22 +287,18 @@ async function buildCostMap(
     { data: semiRecipes },
     { data: semiProds },
   ] = await Promise.all([
-    // Raw ingredient costs
     (supabase.from('ingredients') as any)
       .select('sku, cost')
       .eq('brand_id', brand)
       .in('sku', ingSkus),
-    // Batch costs from active recipes
     (supabase.from('recipes') as any)
       .select('sku, total_cost, yield_portions')
       .eq('brand_id', brand)
       .eq('is_active', true)
       .in('sku', ingSkus),
-    // All batch/semi products — identified by is_semi OR category='Batch'
-    (supabase.from('products') as any)
+    (supabase.from('batches') as any)
       .select('sku')
       .eq('brand_id', brand)
-      .or('is_semi.eq.true,category.eq.Batch')
       .in('sku', ingSkus),
   ])
 
@@ -337,14 +333,19 @@ export async function analyzeImportData(
   const allProductSkus = [...new Set(rows.map(r => r.product_sku))]
   const allIngSkus     = [...new Set(rows.map(r => r.ing_sku))]
 
-  // Load product info, existing recipes, and ingredient costs in parallel
+  // Load product info (from both products and batches tables), existing recipes, and ingredient costs in parallel
   const [
-    { data: dbProducts },
+    { data: dbMeals },
+    { data: dbBatches },
     { data: dbRecipes },
     { costMap, semiSkuSet },
   ] = await Promise.all([
     (supabase.from('products') as any)
-      .select('sku, name, category, price, app_price, is_semi')
+      .select('sku, name, category, price, app_price')
+      .eq('brand_id', brand)
+      .in('sku', allProductSkus),
+    (supabase.from('batches') as any)
+      .select('sku, name, unit')
       .eq('brand_id', brand)
       .in('sku', allProductSkus),
     (supabase.from('recipes') as any)
@@ -354,9 +355,10 @@ export async function analyzeImportData(
     buildCostMap(allIngSkus, brand, supabase),
   ])
 
-  const dbProductSet = new Set<string>((dbProducts || []).map((p: any) => p.sku))
+  const dbProductSet = new Set<string>()
   const dbProductMap = new Map<string, any>()
-  for (const p of dbProducts || []) dbProductMap.set(p.sku, p)
+  for (const p of dbMeals || []) { dbProductSet.add(p.sku); dbProductMap.set(p.sku, p) }
+  for (const b of dbBatches || []) { dbProductSet.add(b.sku); dbProductMap.set(b.sku, { ...b, category: 'Batch', price: 0, app_price: null }) }
 
   // Build existing recipes map: sku → list of recipe records
   const existingRecipes = new Map<string, any[]>()
@@ -528,16 +530,16 @@ export async function executeImport(
     )
     if (selectedVersions.length === 0) continue
 
-    // Create product if new
+    // Create product/batch if new
     if (product.isNew) {
-      const { error: prodErr } = await (supabase.from('products') as any).insert({
-        sku: product.sku, brand_id: brand, name: product.name,
-        category: product.category, price: product.sell_price,
-        app_price: product.app_price, is_semi: product.category === 'Batch',
-        is_base: false, unit: null,
-      })
+      const isBatch = product.category === 'Batch'
+      const insertPayload = isBatch
+        ? { sku: product.sku, brand_id: brand, name: product.name, unit: 'وحدة' }
+        : { sku: product.sku, brand_id: brand, name: product.name, category: 'Meal', price: product.sell_price, app_price: product.app_price, is_base: false, unit: null }
+      const table = isBatch ? 'batches' : 'products'
+      const { error: prodErr } = await (supabase.from(table) as any).insert(insertPayload)
       if (prodErr) {
-        for (const v of selectedVersions) failed.push({ key: v.key, error: `فشل إنشاء المنتج: ${prodErr.message}` })
+        for (const v of selectedVersions) failed.push({ key: v.key, error: `فشل إنشاء ${isBatch ? 'الباتش' : 'المنتج'}: ${prodErr.message}` })
         continue
       }
     }

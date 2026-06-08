@@ -21,6 +21,7 @@ export default function CostingPage() {
       {/* Sidebar */}
       <div className="print:hidden w-72 flex-shrink-0 overflow-hidden">
         <CostingSidebar
+          mode="meals"
           selectedSku={currentProduct?.sku ?? null}
           onSelect={handleSelect}
         />

@@ -7,68 +7,88 @@ import { useBrandStore } from '@/stores/brandStore'
 import { useUserStore } from '@/stores/userStore'
 import { FC_TARGET } from '@/lib/calculations'
 import { qc, cacheKey } from '@/lib/queryCache'
-import type { Product, Recipe } from '@/types'
+import type { Product, BatchProduct, Recipe } from '@/types'
 
 interface Props {
   selectedSku: string | null
   onSelect: (p: Product) => void
+  mode: 'meals' | 'batches'
 }
 
 type Filter = 'all' | 'saved' | 'unsaved'
 
-export default function CostingSidebar({ selectedSku, onSelect }: Props) {
+export default function CostingSidebar({ selectedSku, onSelect, mode }: Props) {
   const { brand } = useBrandStore()
   const { isManagement } = useUserStore()
   const isMgmt = isManagement()
   const [products, setProducts] = useState<Product[]>([])
+  const [batches, setBatches] = useState<BatchProduct[]>([])
   const [recipes, setRecipes] = useState<Record<string, Recipe>>({})
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<Filter>(isMgmt ? 'saved' : 'all')
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async (force = false) => {
-    const pk = cacheKey.products(brand)
     const rk = cacheKey.recipes(brand)
+    const cachedRecs = !force && qc.get<Recipe[]>(rk)
 
-    // Return cached data immediately — no spinner for repeat visits
-    const cachedProds = !force && qc.get<Product[]>(pk)
-    const cachedRecs  = !force && qc.get<Recipe[]>(rk)
-
-    if (cachedProds && cachedRecs) {
-      setProducts(cachedProds)
+    if (mode === 'meals') {
+      const pk = cacheKey.products(brand)
+      const cachedProds = !force && qc.get<Product[]>(pk)
+      if (cachedProds && cachedRecs) {
+        setProducts(cachedProds)
+        const recMap: Record<string, Recipe> = {}
+        cachedRecs.forEach(r => { recMap[r.sku] = r })
+        setRecipes(recMap)
+        setLoading(false)
+        return
+      }
+      setLoading(true)
+      const supabase = createClient()
+      const [{ data: prods }, { data: recs }] = await Promise.all([
+        supabase.from('products').select('*').eq('brand_id', brand).order('name'),
+        cachedRecs ? Promise.resolve({ data: cachedRecs }) : supabase.from('recipes').select('*').eq('brand_id', brand),
+      ])
+      const prodList = (prods as Product[]) || []
+      const recList  = (recs  as Recipe[])  || []
+      qc.set(pk, prodList)
+      qc.set(rk, recList)
+      setProducts(prodList)
       const recMap: Record<string, Recipe> = {}
-      cachedRecs.forEach(r => { recMap[r.sku] = r })
+      recList.forEach(r => { recMap[r.sku] = r })
       setRecipes(recMap)
-      setLoading(false)
-      return
+    } else {
+      const bk = `batches:${brand}`
+      const cachedBatches = !force && qc.get<BatchProduct[]>(bk)
+      if (cachedBatches && cachedRecs) {
+        setBatches(cachedBatches)
+        const recMap: Record<string, Recipe> = {}
+        cachedRecs.forEach(r => { recMap[r.sku] = r })
+        setRecipes(recMap)
+        setLoading(false)
+        return
+      }
+      setLoading(true)
+      const supabase = createClient()
+      const [{ data: batchData }, { data: recs }] = await Promise.all([
+        (supabase.from('batches') as any).select('*').eq('brand_id', brand).order('name'),
+        cachedRecs ? Promise.resolve({ data: cachedRecs }) : supabase.from('recipes').select('*').eq('brand_id', brand),
+      ])
+      const batchList = (batchData as BatchProduct[]) || []
+      const recList   = (recs     as Recipe[])         || []
+      qc.set(bk, batchList)
+      qc.set(rk, recList)
+      setBatches(batchList)
+      const recMap: Record<string, Recipe> = {}
+      recList.forEach(r => { recMap[r.sku] = r })
+      setRecipes(recMap)
     }
-
-    setLoading(true)
-    const supabase = createClient()
-    const [{ data: prods }, { data: recs }] = await Promise.all([
-      supabase.from('products').select('*').eq('brand_id', brand).order('name'),
-      supabase.from('recipes').select('*').eq('brand_id', brand),
-    ])
-
-    const products = (prods as Product[]) || []
-    const recipes  = (recs  as Recipe[])  || []
-
-    qc.set(pk, products)
-    qc.set(rk, recipes)
-
-    setProducts(products)
-    const recMap: Record<string, Recipe> = {}
-    recipes.forEach(r => { recMap[r.sku] = r })
-    setRecipes(recMap)
     setLoading(false)
-  }, [brand])
+  }, [brand, mode])
 
   useEffect(() => { load() }, [load])
 
-  const meals = products.filter(p => p.category === 'Meal' && !p.is_semi)
-  const batches = isMgmt ? [] : products.filter(p => p.category === 'Batch' || p.is_semi)
-
-  function applyFilter(items: Product[]) {
+  function applyFilter<T extends { sku: string; name: string }>(items: T[]): T[] {
     let result = items
     if (filter === 'saved')   result = result.filter(p => !!recipes[p.sku])
     if (filter === 'unsaved') result = result.filter(p => !recipes[p.sku])
@@ -79,16 +99,56 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
     return result
   }
 
-  const filteredMeals = applyFilter(meals)
+  const filteredMeals   = applyFilter(products.filter(p => p.category === 'Meal'))
   const filteredBatches = applyFilter(batches)
 
-  const savedCount = products.filter(p => !!recipes[p.sku]).length
+  const listCount  = mode === 'meals' ? filteredMeals.length : filteredBatches.length
+  const savedCount = mode === 'meals'
+    ? products.filter(p => !!recipes[p.sku]).length
+    : batches.filter(b => !!recipes[b.sku]).length
   const overTarget = Object.values(recipes).filter(r => r.food_cost_pct > FC_TARGET).length
+
+  function handleBatchSelect(b: BatchProduct) {
+    const asProduct: Product = {
+      sku: b.sku,
+      brand_id: b.brand_id,
+      name: b.name,
+      category: 'Meal',
+      price: 0,
+      app_price: null,
+      app_sku: null,
+      unit: b.unit,
+      is_base: false,
+      is_semi: true,
+      created_at: b.created_at,
+    }
+    onSelect(asProduct)
+  }
 
   return (
     <div className="flex flex-col h-full bg-white border-l border-gray-200">
       {/* Header */}
       <div className="p-3 border-b border-gray-200 space-y-2">
+        {/* Mode toggle */}
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          <Link
+            href="/costing"
+            className={`flex-1 text-center text-xs py-1.5 rounded-md font-medium transition-colors ${
+              mode === 'meals' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            🍽 منتجات
+          </Link>
+          <Link
+            href="/costing/batches"
+            className={`flex-1 text-center text-xs py-1.5 rounded-md font-medium transition-colors ${
+              mode === 'batches' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            ⚙ باتش
+          </Link>
+        </div>
+
         <div className="flex items-center justify-between">
           <span className="text-xs text-gray-500 font-medium">
             {savedCount} وصفة محفوظة
@@ -99,7 +159,7 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
             </span>
           )}
         </div>
-        {!isMgmt && (
+        {!isMgmt && mode === 'meals' && (
           <Link
             href="/costing/import"
             className="flex items-center justify-center gap-1.5 w-full text-xs font-medium py-1.5 px-3 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 transition-colors"
@@ -138,15 +198,16 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
           <div className="text-center text-gray-400 py-8 text-sm">جارٍ التحميل...</div>
         ) : (
           <>
-            {filteredMeals.length > 0 && (
+            {mode === 'meals' && filteredMeals.length > 0 && (
               <div>
                 <div className="px-3 py-1.5 text-xs text-gray-400 font-semibold uppercase tracking-wider bg-gray-50 sticky top-0 border-b border-gray-100">
-                  منتجات ({filteredMeals.length})
+                  🍽 منتجات ({filteredMeals.length})
                 </div>
                 {filteredMeals.map(p => (
-                  <ProductItem
+                  <SidebarItem
                     key={p.sku}
-                    product={p}
+                    sku={p.sku}
+                    name={p.name}
                     recipe={recipes[p.sku] || null}
                     selected={selectedSku === p.sku}
                     onClick={() => onSelect(p)}
@@ -154,23 +215,24 @@ export default function CostingSidebar({ selectedSku, onSelect }: Props) {
                 ))}
               </div>
             )}
-            {filteredBatches.length > 0 && (
+            {mode === 'batches' && filteredBatches.length > 0 && (
               <div>
                 <div className="px-3 py-1.5 text-xs text-gray-400 font-semibold uppercase tracking-wider bg-gray-50 sticky top-0 border-b border-gray-100">
-                  ⚙ وسيطة — Batch ({filteredBatches.length})
+                  ⚙ باتش ({filteredBatches.length})
                 </div>
-                {filteredBatches.map(p => (
-                  <ProductItem
-                    key={p.sku}
-                    product={p}
-                    recipe={recipes[p.sku] || null}
-                    selected={selectedSku === p.sku}
-                    onClick={() => onSelect(p)}
+                {filteredBatches.map(b => (
+                  <SidebarItem
+                    key={b.sku}
+                    sku={b.sku}
+                    name={b.name}
+                    recipe={recipes[b.sku] || null}
+                    selected={selectedSku === b.sku}
+                    onClick={() => handleBatchSelect(b)}
                   />
                 ))}
               </div>
             )}
-            {filteredMeals.length === 0 && filteredBatches.length === 0 && (
+            {listCount === 0 && (
               <div className="text-center text-gray-400 py-8 text-sm">لا توجد نتائج</div>
             )}
           </>
@@ -187,13 +249,15 @@ function fcColor(pct: number | null): string {
   return 'text-red-600'
 }
 
-function ProductItem({
-  product,
+function SidebarItem({
+  sku,
+  name,
   recipe,
   selected,
   onClick,
 }: {
-  product: Product
+  sku: string
+  name: string
   recipe: Recipe | null
   selected: boolean
   onClick: () => void
@@ -213,9 +277,9 @@ function ProductItem({
     >
       <div className="flex-1 min-w-0">
         <div className={`text-sm truncate ${selected ? 'text-blue-700 font-medium' : 'text-gray-800'}`}>
-          {product.name}
+          {name}
         </div>
-        <div className="text-xs text-gray-400 font-mono">{product.sku}</div>
+        <div className="text-xs text-gray-400 font-mono">{sku}</div>
       </div>
       <div className="flex-shrink-0 text-left">
         {hasBothPct ? (

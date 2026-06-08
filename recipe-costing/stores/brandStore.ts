@@ -24,8 +24,16 @@ export const useBrandStore = create<BrandStore>()(
       brandPicked: false,
       nav: 'costing',
       hydrated: false,
-      setBrand: (brand) => set({ brand }),
-      pickBrand: (brand) => set({ brand, brandPicked: true }),
+      setBrand: (brand) => {
+        if (typeof document !== 'undefined')
+          document.cookie = `brand=${brand}; path=/; max-age=31536000; SameSite=Lax`
+        set({ brand })
+      },
+      pickBrand: (brand) => {
+        if (typeof document !== 'undefined')
+          document.cookie = `brand=${brand}; path=/; max-age=31536000; SameSite=Lax`
+        set({ brand, brandPicked: true })
+      },
       setNav: (nav) => set({ nav }),
       resetPick: () => set({ brandPicked: false }),
       setHydrated: (hydrated) => set({ hydrated }),
