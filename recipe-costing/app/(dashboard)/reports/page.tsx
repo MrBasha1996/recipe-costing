@@ -55,7 +55,7 @@ export default function ReportsPage() {
       (supabase.from('brands') as any)
         .select('fc_target_low, fc_target_high').eq('id', brand).single(),
     ]).then(([{ data: salesData }, { data: brandRow }]) => {
-      const uniq = [...new Set((salesData || []).map((r: any) => r.branch_name as string).filter((x): x is string => Boolean(x)))].sort()
+      const uniq = [...new Set((salesData || []).map((r: any) => r.branch_name as string).filter((x: unknown): x is string => Boolean(x)))].sort()
       setBranches(uniq)
       if (brandRow) {
         setFcLow(brandRow.fc_target_low ?? 35)
