@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0e1f2e"/>
+  <!-- Plate -->
+  <circle cx="256" cy="256" r="110" fill="none" stroke="#3b82f6" stroke-width="10"/>
+  <!-- Fork left -->
+  <line x1="210" y1="170" x2="210" y2="230" stroke="#60a5fa" stroke-width="8" stroke-linecap="round"/>
+  <line x1="224" y1="170" x2="224" y2="230" stroke="#60a5fa" stroke-width="8" stroke-linecap="round"/>
+  <line x1="238" y1="170" x2="238" y2="230" stroke="#60a5fa" stroke-width="8" stroke-linecap="round"/>
+  <line x1="224" y1="230" x2="224" y2="340" stroke="#60a5fa" stroke-width="8" stroke-linecap="round"/>
+  <!-- Knife right -->
+  <path d="M282 170 Q310 200 290 240 L282 240 Z" fill="#60a5fa"/>
+  <line x1="282" y1="240" x2="282" y2="340" stroke="#60a5fa" stroke-width="8" stroke-linecap="round"/>
+  <!-- Arabic text: ت (Takalyf) subtle accent bar -->
+  <rect x="128" y="290" width="256" height="4" rx="2" fill="url(#accent)"/>
+  <defs>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e40af"/>
+      <stop offset="50%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+</svg>

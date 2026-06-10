@@ -13,10 +13,12 @@ import type { BrandId } from '@/types'
 export async function downloadIngredientsTemplate(): Promise<void> {
   const X = await xlsx()
   const ws = X.utils.json_to_sheet([
-    { 'SKU': 'i-001', 'الاسم': 'زيت نباتي', 'الفئة': 'زيوت', 'الوحدة': 'لتر', 'التكلفة': 8.50 },
-    { 'SKU': 'i-002', 'الاسم': 'دقيق', 'الفئة': 'بقوليات', 'الوحدة': 'كيلو', 'التكلفة': 3.25 },
+    { 'SKU': 'i-001', 'الاسم': 'زيت نباتي',  'الفئة': 'زيوت',    'وحدة المخزون': 'ميليلتر', 'التكلفة': 8.50,  'وحدة الشراء': 'جالون', 'معامل التحويل': 17000 },
+    { 'SKU': 'i-002', 'الاسم': 'دقيق أبيض',  'الفئة': 'بقوليات', 'وحدة المخزون': 'جرام',     'التكلفة': 3.25,  'وحدة الشراء': 'كيلو',  'معامل التحويل': 1000  },
+    { 'SKU': 'i-003', 'الاسم': 'بيض عادي',   'الفئة': 'بروتين',  'وحدة المخزون': 'حبة',      'التكلفة': 0.75,  'وحدة الشراء': 'طبق',   'معامل التحويل': 30    },
+    { 'SKU': 'i-004', 'الاسم': 'ملح طبخ',    'الفئة': 'بهارات',  'وحدة المخزون': 'جرام',     'التكلفة': 0.005, 'وحدة الشراء': '',       'معامل التحويل': ''    },
   ])
-  ws['!cols'] = [{ wch: 16 }, { wch: 32 }, { wch: 18 }, { wch: 12 }, { wch: 12 }]
+  ws['!cols'] = [{ wch: 14 }, { wch: 32 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 16 }]
   const wb = X.utils.book_new()
   X.utils.book_append_sheet(wb, ws, 'مواد خام')
   X.writeFile(wb, 'قالب_مواد_خام.xlsx')
@@ -146,13 +148,18 @@ export async function importIngredients(
     const name = String(r['الاسم'] ?? '').trim()
     if (!sku || !name) { result.errors.push({ sku: sku || '?', message: 'SKU أو الاسم مفقود' }); continue }
 
+    const unit     = String(r['وحدة المخزون'] ?? r['الوحدة'] ?? '').trim() || 'وحدة'
+    const buyUnit  = String(r['وحدة الشراء'] ?? '').trim()
+    const factorRaw = r['معامل التحويل']
+    const factor   = factorRaw != null && String(factorRaw).trim() !== '' ? parseFloat(String(factorRaw)) : null
+
     const payload = {
       sku,
       brand_id: brand,
       name,
       category: String(r['الفئة'] ?? '').trim() || 'عام',
-      unit:     String(r['الوحدة'] ?? '').trim() || 'وحدة',
-      cost:     parseFloat(r['التكلفة']) || 0,
+      unit,
+      cost: parseFloat(r['التكلفة']) || 0,
     }
 
     const { data: existing } = await (supabase.from('ingredients') as any)
@@ -162,12 +169,24 @@ export async function importIngredients(
       const { error } = await (supabase.from('ingredients') as any)
         .update({ name: payload.name, category: payload.category, unit: payload.unit, cost: payload.cost })
         .eq('sku', sku).eq('brand_id', brand)
-      if (error) result.errors.push({ sku, message: error.message })
-      else result.updated++
+      if (error) { result.errors.push({ sku, message: error.message }); continue }
+      result.updated++
     } else {
       const { error } = await (supabase.from('ingredients') as any).insert(payload)
-      if (error) result.errors.push({ sku, message: error.message })
-      else result.inserted++
+      if (error) { result.errors.push({ sku, message: error.message }); continue }
+      result.inserted++
+    }
+
+    if (buyUnit && factor != null && factor > 0) {
+      await (supabase.from('unit_conversions') as any).upsert({
+        brand_id:    brand,
+        ing_sku:     sku,
+        ing_name:    name,
+        buy_unit:    buyUnit,
+        recipe_unit: unit,
+        factor,
+        updated_at:  new Date().toISOString(),
+      }, { onConflict: 'brand_id,ing_sku' })
     }
   }
 

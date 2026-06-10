@@ -133,7 +133,7 @@ export default function PermissionsMatrix({
 
   return (
     <div className="overflow-x-auto rounded-xl border border-gray-200">
-      <table className="w-full text-sm">
+      <table suppressHydrationWarning className="w-full text-sm">
         <thead>
           <tr className="bg-gray-50 border-b border-gray-200">
             <th className="text-right px-4 py-3 text-xs text-gray-500 font-semibold sticky right-0 bg-gray-50 z-10 min-w-[140px]">

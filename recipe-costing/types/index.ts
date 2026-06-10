@@ -51,6 +51,16 @@ export interface Ingredient {
   created_at: string
 }
 
+export interface UnitConversion {
+  id: string
+  brand_id: BrandId
+  ing_sku: string
+  ing_name: string
+  buy_unit: string
+  recipe_unit: string
+  factor: number
+}
+
 export type IngredientSection = 'food' | 'packaging'
 export type ServiceType = 'both' | 'dine_in' | 'dine_out'
 
@@ -199,14 +209,29 @@ export interface DailySale {
   created_at: string
 }
 
+export type LaborDept = 'kitchen' | 'service' | 'cashier' | 'delivery' | 'admin' | 'other'
+
 export interface LaborCost {
   id: string
   brand_id: BrandId
   month: string
+  department: LaborDept
   description: string
   amount: number
   created_by: string | null
   created_at: string
+}
+
+export interface MonthlyBudget {
+  id: string
+  brand_id: BrandId
+  month: string
+  revenue_target: number | null
+  fc_pct_target: number | null
+  labor_pct_target: number | null
+  overhead_pct_target: number | null
+  created_by: string | null
+  updated_at: string
 }
 
 export type OverheadCategory = 'rent' | 'electricity' | 'gas' | 'maintenance' | 'marketing' | 'other'

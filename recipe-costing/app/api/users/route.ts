@@ -1,31 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireSuperAdmin, isAuthError } from '@/lib/auth'
 
-async function requireSuperAdmin() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: profile } = await (supabase.from('user_profiles') as any)
-    .select('role_id, roles(is_super_admin)')
-    .eq('id', user.id)
-    .single()
-
-  return (profile?.roles as any)?.is_super_admin ? user : null
-}
+const CreateUserSchema = z.object({
+  email:        z.string().email(),
+  password:     z.string().min(8),
+  username:     z.string().min(1),
+  name_ar:      z.string().min(1),
+  brand_access: z.string().min(1),
+  role_id:      z.string().uuid().nullable().optional(),
+})
 
 // ── POST /api/users — create new user ────────────────────────────
 export async function POST(request: NextRequest) {
   const caller = await requireSuperAdmin()
-  if (!caller) return NextResponse.json({ error: 'غير مصرح' }, { status: 403 })
+  if (isAuthError(caller)) return caller
 
-  const { email, password, username, name_ar, brand_access, role_id } = await request.json()
-
-  if (!email || !password || !username || !name_ar || !brand_access) {
-    return NextResponse.json({ error: 'جميع الحقول مطلوبة' }, { status: 400 })
+  let body: unknown
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'Body غير صالح' }, { status: 400 })
   }
 
+  const parsed = CreateUserSchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
+  }
+
+  const { email, password, username, name_ar, brand_access, role_id } = parsed.data
   const admin = createAdminClient()
 
   const { data: authData, error: authErr } = await admin.auth.admin.createUser({
@@ -41,7 +43,7 @@ export async function POST(request: NextRequest) {
     username,
     name_ar,
     brand_access,
-    role_id: role_id || null,
+    role_id: role_id ?? null,
   })
 
   if (profileErr) {

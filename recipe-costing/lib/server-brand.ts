@@ -1,7 +1,9 @@
-import { cookies } from 'next/headers'
 import type { BrandId } from '@/types'
 
-export async function getServerBrand(): Promise<BrandId> {
-  const store = await cookies()
-  return (store.get('brand')?.value as BrandId) ?? 'ti'
+const VALID_BRANDS: BrandId[] = ['ti', 'bb']
+
+/** Validate a brand param from the URL route segment. Returns 'bb' as fallback. */
+export function brandFromParam(param: string | undefined): BrandId {
+  if (param && VALID_BRANDS.includes(param as BrandId)) return param as BrandId
+  return 'bb'
 }

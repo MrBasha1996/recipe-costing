@@ -17,7 +17,7 @@ export default function LoginPage() {
     setLoading(true)
 
     const supabase = createClient()
-    const { error: signInError } = await supabase.auth.signInWithPassword({
+    const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
       email,
       password,
     })
@@ -28,7 +28,13 @@ export default function LoginPage() {
       return
     }
 
-    router.push('/costing')
+    const { data: profile } = await (supabase.from('user_profiles') as any)
+      .select('brand_access')
+      .eq('id', signInData.user.id)
+      .single()
+
+    const brand = (profile as any)?.brand_access === 'all' ? 'bb' : ((profile as any)?.brand_access ?? 'bb')
+    router.push(`/${brand}/costing`)
     router.refresh()
   }
 

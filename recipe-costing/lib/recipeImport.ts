@@ -43,6 +43,7 @@ export interface ImportVersion {
   unknownSkus: string[]     // ing_skus not found anywhere in DB (truly unknown)
   activeRecipeId: string | null    // ID of current active recipe (used for overwrite mode)
   activeVersionNumber: number | null
+  activeRecipeApproved: boolean | null  // null = no active recipe
 }
 
 export interface ImportProduct {
@@ -69,6 +70,7 @@ export interface ImportAnalysis {
 
 // ── Template download ─────────────────────────────────────────────
 
+// ── Meal recipe import template ───────────────────────────────────
 export async function downloadRecipeImportTemplate(): Promise<void> {
   const X = await xlsx()
   const wb = X.utils.book_new()
@@ -111,14 +113,52 @@ export async function downloadRecipeImportTemplate(): Promise<void> {
       'القسم (food/packaging)': 'food',
       'نوع الخدمة (both/dine_in/dine_out)': 'both',
     },
+  ])
+  wsIng['!cols'] = [
+    { wch: 14 }, { wch: 22 }, { wch: 14 }, { wch: 28 },
+    { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 30 },
+  ]
+  X.utils.book_append_sheet(wb, wsIng, 'مكونات الوصفة')
+
+  X.writeFile(wb, 'قالب_استيراد_وصفات_المنتجات.xlsx')
+}
+
+// ── Batch recipe import template ──────────────────────────────────
+export async function downloadBatchRecipeImportTemplate(): Promise<void> {
+  const X = await xlsx()
+  const wb = X.utils.book_new()
+
+  const wsProds = X.utils.json_to_sheet([
     {
-      'SKU المنتج': 'p-001',
-      'اسم الإصدار': 'وصفة رمضان',
-      'SKU المكوّن': 'i-001',
-      'اسم المكوّن': 'فول مدمس',
-      'الكمية': 250,
+      'SKU الباتش': 'sk-001',
+      'اسم الباتش': 'صوص الفول',
+      'النوع (Meal/Batch)': 'Batch',
+      'الكمية المنتجة (وحدة)': 1,
+    },
+  ])
+  wsProds['!cols'] = [{ wch: 16 }, { wch: 28 }, { wch: 18 }, { wch: 22 }]
+  X.utils.book_append_sheet(wb, wsProds, 'الباتشات')
+
+  const wsIng = X.utils.json_to_sheet([
+    {
+      'SKU المنتج': 'sk-001',
+      'اسم الإصدار': 'الوصفة الأساسية',
+      'SKU المكوّن': 'i-010',
+      'اسم المكوّن': 'طحينة',
+      'الكمية': 500,
       'الوحدة': 'جرام',
       'Yield %': 100,
+      'القسم (food/packaging)': 'food',
+      'نوع الخدمة (both/dine_in/dine_out)': 'both',
+    },
+    {
+      'SKU المنتج': 'sk-001',
+      'اسم الإصدار': 'الوصفة الأساسية',
+      'SKU المكوّن': 'i-011',
+      'اسم المكوّن': 'ليمون',
+      'الكمية': 100,
+      'الوحدة': 'جرام',
+      'Yield %': 85,
       'القسم (food/packaging)': 'food',
       'نوع الخدمة (both/dine_in/dine_out)': 'both',
     },
@@ -129,7 +169,7 @@ export async function downloadRecipeImportTemplate(): Promise<void> {
   ]
   X.utils.book_append_sheet(wb, wsIng, 'مكونات الوصفة')
 
-  X.writeFile(wb, 'قالب_استيراد_الوصفات.xlsx')
+  X.writeFile(wb, 'قالب_استيراد_وصفات_الباتشات.xlsx')
 }
 
 // ── Parser ────────────────────────────────────────────────────────
@@ -172,7 +212,11 @@ export interface ParseResult {
   errors: ParseError[]
 }
 
-export function parseRecipeImportFile(file: File): Promise<ParseResult> {
+export type ImportMode = 'meal' | 'batch'
+
+export function parseRecipeImportFile(file: File, mode: ImportMode = 'meal'): Promise<ParseResult> {
+  const expectedCategory: 'Meal' | 'Batch' = mode === 'batch' ? 'Batch' : 'Meal'
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onerror = () => reject(new Error('فشل قراءة الملف'))
@@ -182,11 +226,22 @@ export function parseRecipeImportFile(file: File): Promise<ParseResult> {
         const data = new Uint8Array(e.target!.result as ArrayBuffer)
         const wb = X.read(data, { type: 'array' })
 
-        const prodSheetName = wb.SheetNames.find(n => n.includes('منتج') || n.includes('product')) ?? wb.SheetNames[0]
-        const ingSheetName  = wb.SheetNames.find(n => n.includes('مكون') || n.includes('ingredient')) ?? wb.SheetNames[1]
+        const prodSheetName = (mode === 'batch'
+          ? wb.SheetNames.find(n => (n.includes('باتش') || n.includes('batch')) && !n.includes('مكون'))
+            ?? wb.SheetNames.find(n => n.includes('باتش') || n.includes('batch'))
+          : wb.SheetNames.find(n => (n.includes('منتج') || n.includes('product')) && !n.includes('مكون'))
+            ?? wb.SheetNames.find(n => n.includes('منتج') || n.includes('product'))
+        ) ?? wb.SheetNames[0]
+
+        const ingSheetName = (mode === 'batch'
+          ? wb.SheetNames.find(n => (n.includes('مكون') || n.includes('ingredient')) && (n.includes('باتش') || n.includes('batch')))
+            ?? wb.SheetNames.find(n => n.includes('مكون') || n.includes('ingredient'))
+          : wb.SheetNames.find(n => (n.includes('مكون') || n.includes('ingredient')) && (n.includes('منتج') || n.includes('meal')))
+            ?? wb.SheetNames.find(n => n.includes('مكون') || n.includes('ingredient'))
+        ) ?? wb.SheetNames[1]
 
         if (!prodSheetName || !ingSheetName) {
-          throw new Error('لم يتم العثور على ورقتي "المنتجات" و"مكونات الوصفة" في الملف')
+          throw new Error('لم يتم العثور على الورقتين المطلوبتين في الملف')
         }
 
         const prodRows: any[] = X.utils.sheet_to_json(wb.Sheets[prodSheetName])
@@ -198,13 +253,17 @@ export function parseRecipeImportFile(file: File): Promise<ParseResult> {
         }>()
 
         for (const r of prodRows) {
-          const sku = String(r['SKU المنتج'] ?? '').trim()
+          // قالب الباتش يستخدم "SKU الباتش"، قالب المنتجات يستخدم "SKU المنتج"
+          const sku = String(r['SKU المنتج'] ?? r['SKU الباتش'] ?? '').trim()
           if (!sku) continue
           const cat = String(r['النوع (Meal/Batch)'] ?? '').trim()
+          const resolvedCat: 'Meal' | 'Batch' = cat === 'Batch' ? 'Batch' : 'Meal'
+          // في وضع الباتش: إذا لم يُحدَّد النوع، نعامله كـ Batch تلقائياً
+          const finalCat: 'Meal' | 'Batch' = cat === '' ? expectedCategory : resolvedCat
           productMap.set(sku, {
-            name: String(r['اسم المنتج'] ?? '').trim(),
-            category: cat === 'Batch' ? 'Batch' : 'Meal',
-            yield_portions: parseFloat(r['عدد الحصص']) || 1,
+            name: String(r['اسم المنتج'] ?? r['اسم الباتش'] ?? '').trim(),
+            category: finalCat,
+            yield_portions: parseFloat(r['عدد الحصص'] ?? r['الكمية المنتجة (وحدة)']) || 1,
             sell_price: parseFloat(r['سعر البيع (ريال شامل VAT)']) || 0,
             app_price: r['سعر التطبيق (ريال شامل VAT)'] != null && r['سعر التطبيق (ريال شامل VAT)'] !== ''
               ? parseFloat(r['سعر التطبيق (ريال شامل VAT)']) : null,
@@ -220,11 +279,17 @@ export function parseRecipeImportFile(file: File): Promise<ParseResult> {
           const ing_sku = String(r['SKU المكوّن'] ?? '').trim()
           const ing_name = String(r['اسم المكوّن'] ?? '').trim()
 
-          if (!product_sku) { errors.push({ row: rowNum, message: `سطر ${rowNum}: SKU المنتج مطلوب` }); return }
+          if (!product_sku) { errors.push({ row: rowNum, message: `سطر ${rowNum}: SKU مطلوب` }); return }
           if (!ing_sku || !ing_name) { errors.push({ row: rowNum, message: `سطر ${rowNum}: SKU المكوّن واسمه مطلوبان` }); return }
 
           const prod = productMap.get(product_sku)
-          if (!prod) { errors.push({ row: rowNum, message: `سطر ${rowNum}: SKU المنتج "${product_sku}" غير موجود في ورقة المنتجات` }); return }
+          if (!prod) { errors.push({ row: rowNum, message: `سطر ${rowNum}: SKU "${product_sku}" غير موجود في الورقة الأولى` }); return }
+
+          // فلتر صارم: تجاهل الصفوف التي لا تتطابق مع الوضع الحالي
+          if (prod.category !== expectedCategory) {
+            errors.push({ row: rowNum, message: `سطر ${rowNum}: "${product_sku}" من نوع ${prod.category} — استخدم صفحة استيراد ${prod.category === 'Meal' ? 'المنتجات' : 'الباتشات'}` })
+            return
+          }
 
           rows.push({
             product_sku,
@@ -286,6 +351,7 @@ async function buildCostMap(
     { data: rawCosts },
     { data: semiRecipes },
     { data: semiProds },
+    { data: semiProdsLegacy },
   ] = await Promise.all([
     (supabase.from('ingredients') as any)
       .select('sku, cost')
@@ -294,11 +360,19 @@ async function buildCostMap(
     (supabase.from('recipes') as any)
       .select('sku, total_cost, yield_portions')
       .eq('brand_id', brand)
+      .eq('is_semi', true)
       .eq('is_active', true)
       .in('sku', ingSkus),
+    // No brand filter: a batch can be used as ingredient regardless of which brand "owns" it.
+    // Brand isolation for ownership is enforced in analyzeImportData; here we just need existence.
     (supabase.from('batches') as any)
       .select('sku')
+      .in('sku', ingSkus),
+    // Legacy: batches stored in products table (is_semi=true) before migration 009
+    (supabase.from('products') as any)
+      .select('sku')
       .eq('brand_id', brand)
+      .eq('is_semi', true)
       .in('sku', ingSkus),
   ])
 
@@ -308,8 +382,12 @@ async function buildCostMap(
     if (r.yield_portions > 0) costMap.set(r.sku, r.total_cost / r.yield_portions)
   }
 
-  // Semi-products that exist in DB but have no active recipe → cost = 0, still "known"
-  const semiSkuSet = new Set<string>((semiProds || []).map((p: any) => p.sku))
+  // semiSkuSet = all SKUs known to be batches (regardless of whether they have a recipe)
+  const semiSkuSet = new Set<string>([
+    ...(semiProds || []).map((p: any) => p.sku),
+    ...(semiProdsLegacy || []).map((p: any) => p.sku),
+    ...(semiRecipes || []).map((r: any) => r.sku),  // batches with active recipes are also "known"
+  ])
   for (const sku of semiSkuSet) {
     if (!costMap.has(sku)) costMap.set(sku, 0)
   }
@@ -330,35 +408,45 @@ export async function analyzeImportData(
     return { products: [], summary: { totalProducts: 0, newProducts: 0, totalVersions: 0, toImport: 0, duplicates: 0, errors: 0 } }
   }
 
-  const allProductSkus = [...new Set(rows.map(r => r.product_sku))]
-  const allIngSkus     = [...new Set(rows.map(r => r.ing_sku))]
+  // Separate product SKUs by category to avoid cross-table SKU collisions
+  const allMealSkus  = [...new Set(rows.filter(r => r.product_category === 'Meal').map(r => r.product_sku))]
+  const allBatchSkus = [...new Set(rows.filter(r => r.product_category === 'Batch').map(r => r.product_sku))]
+  const allIngSkus   = [...new Set(rows.map(r => r.ing_sku))]
+  // If all rows are Batch, recipes must be queried with is_semi=true to avoid SKU collision with products
+  const isBatchMode  = allMealSkus.length === 0
 
-  // Load product info (from both products and batches tables), existing recipes, and ingredient costs in parallel
-  const [
-    { data: dbMeals },
-    { data: dbBatches },
-    { data: dbRecipes },
-    { costMap, semiSkuSet },
-  ] = await Promise.all([
-    (supabase.from('products') as any)
-      .select('sku, name, category, price, app_price')
-      .eq('brand_id', brand)
-      .in('sku', allProductSkus),
-    (supabase.from('batches') as any)
-      .select('sku, name, unit')
-      .eq('brand_id', brand)
-      .in('sku', allProductSkus),
+  const [mealsResult, batchesResult, recipesResult, costData] = await Promise.all([
+    allMealSkus.length > 0
+      ? (supabase.from('products') as any)
+          .select('sku, name, category, price, app_price')
+          .eq('brand_id', brand)
+          .in('sku', allMealSkus)
+      : Promise.resolve({ data: [] as any[] }),
+    allBatchSkus.length > 0
+      ? (supabase.from('batches') as any)
+          .select('sku, name, unit')
+          .eq('brand_id', brand)
+          .in('sku', allBatchSkus)
+      : Promise.resolve({ data: [] as any[] }),
     (supabase.from('recipes') as any)
-      .select('id, sku, version, is_active, recipe_ingredients(*)')
+      .select('id, sku, version, is_active, is_approved, recipe_ingredients(*)')
       .eq('brand_id', brand)
-      .in('sku', allProductSkus),
+      .eq('is_semi', isBatchMode)
+      .in('sku', isBatchMode ? allBatchSkus : allMealSkus),
     buildCostMap(allIngSkus, brand, supabase),
   ])
 
-  const dbProductSet = new Set<string>()
+  const { data: dbMeals }   = mealsResult
+  const { data: dbBatches } = batchesResult
+  const { data: dbRecipes } = recipesResult
+  const { costMap, semiSkuSet } = costData
+
+  // Build product existence sets separately per table — no cross-contamination
+  const dbMealSet    = new Set<string>((dbMeals   || []).map((p: any) => p.sku))
+  const dbBatchSet   = new Set<string>((dbBatches || []).map((b: any) => b.sku))
   const dbProductMap = new Map<string, any>()
-  for (const p of dbMeals || []) { dbProductSet.add(p.sku); dbProductMap.set(p.sku, p) }
-  for (const b of dbBatches || []) { dbProductSet.add(b.sku); dbProductMap.set(b.sku, { ...b, category: 'Batch', price: 0, app_price: null }) }
+  for (const p of dbMeals   || []) dbProductMap.set(p.sku, p)
+  for (const b of dbBatches || []) dbProductMap.set(b.sku, { ...b, category: 'Batch', price: 0, app_price: null })
 
   // Build existing recipes map: sku → list of recipe records
   const existingRecipes = new Map<string, any[]>()
@@ -396,7 +484,8 @@ export async function analyzeImportData(
 
   for (const [sku, versionMap] of productVersionMap) {
     const meta = productMeta.get(sku)!
-    const isNew = !dbProductSet.has(sku)
+    // Check existence in the correct table based on category (prevents SKU collision)
+    const isNew = meta.category === 'Batch' ? !dbBatchSet.has(sku) : !dbMealSet.has(sku)
     const existingRecs = existingRecipes.get(sku) ?? []
     const activeRec = existingRecs.find((r: any) => r.is_active) ?? null
     const maxVersion = existingRecs.length > 0 ? Math.max(...existingRecs.map((r: any) => r.version)) : 0
@@ -437,7 +526,7 @@ export async function analyzeImportData(
 
       if (isNew) {
         status = 'new_product'
-        statusMessage = 'منتج جديد + وصفة جديدة'
+        statusMessage = meta.category === 'Batch' ? 'باتش جديد + وصفة جديدة' : 'منتج جديد + وصفة جديدة'
       } else if (existingRecs.length === 0) {
         status = 'new_recipe'
         statusMessage = 'أول وصفة لهذا المنتج'
@@ -451,7 +540,11 @@ export async function analyzeImportData(
           statusMessage = 'مكونات مطابقة لإصدار موجود — سيتم تخطيها'
         } else {
           status = 'new_version'
-          statusMessage = `مختلفة عن الإصدار النشط — اختر: إصدار جديد أو استبدال`
+          if (activeRec && activeRec.is_approved === false) {
+            statusMessage = 'مكونات مختلفة — الإصدار النشط غير معتمد، اختر: تعديل الحالي أو إصدار جديد'
+          } else {
+            statusMessage = 'مكونات مختلفة — سيُضاف إصدار جديد (الإصدار النشط معتمد)'
+          }
         }
       }
 
@@ -468,6 +561,7 @@ export async function analyzeImportData(
         unknownSkus,
         activeRecipeId: activeRec?.id ?? null,
         activeVersionNumber: activeRec?.version ?? null,
+        activeRecipeApproved: activeRec != null ? (activeRec.is_approved ?? false) : null,
       })
     }
 
@@ -530,9 +624,10 @@ export async function executeImport(
     )
     if (selectedVersions.length === 0) continue
 
+    const isBatch = product.category === 'Batch'
+
     // Create product/batch if new
     if (product.isNew) {
-      const isBatch = product.category === 'Batch'
       const insertPayload = isBatch
         ? { sku: product.sku, brand_id: brand, name: product.name, unit: 'وحدة' }
         : { sku: product.sku, brand_id: brand, name: product.name, category: 'Meal', price: product.sell_price, app_price: product.app_price, is_base: false, unit: null }
@@ -549,6 +644,7 @@ export async function executeImport(
       .select('id, version, is_active')
       .eq('sku', product.sku)
       .eq('brand_id', brand)
+      .eq('is_semi', isBatch)
     const maxExistingVersion = (existingRecs || []).length > 0
       ? Math.max(...(existingRecs as any[]).map((r: any) => r.version))
       : 0

@@ -22,7 +22,10 @@ export const useUserStore = create<UserStore>()((set) => ({
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
     return isSuperAdmin || hasPermission(module, 'update')
   },
-  isAccountant: () => usePermissionsStore.getState().isSuperAdmin,
+  isAccountant: () => {
+    const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
+    return isSuperAdmin || hasPermission('costs', 'view')
+  },
   isManagement: () => {
     const { isSuperAdmin, hasPermission } = usePermissionsStore.getState()
     return !isSuperAdmin && hasPermission('reports', 'view')

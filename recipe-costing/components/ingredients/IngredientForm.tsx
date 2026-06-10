@@ -77,6 +77,8 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
   const [error, setError] = useState('')
   const [monthlyHistory, setMonthlyHistory] = useState<MonthlyAvg[]>([])
   const [historyReady, setHistoryReady] = useState(false)
+  const [buyUnit, setBuyUnit] = useState('')
+  const [convFactor, setConvFactor] = useState('')
 
   const { isCurrentClosed, currentYM } = usePeriod()
 
@@ -92,6 +94,22 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
       .then(({ data }: any) => {
         setMonthlyHistory((data as MonthlyAvg[]) || [])
         setHistoryReady(true)
+      })
+  }, [brand, ingredient, isEdit])
+
+  useEffect(() => {
+    if (!isEdit || !ingredient) return
+    const supabase = createClient()
+    ;(supabase.from('unit_conversions') as any)
+      .select('buy_unit, factor')
+      .eq('brand_id', brand)
+      .eq('ing_sku', ingredient.sku)
+      .maybeSingle()
+      .then(({ data }: any) => {
+        if (data) {
+          setBuyUnit(data.buy_unit || '')
+          setConvFactor(data.factor != null ? String(data.factor) : '')
+        }
       })
   }, [brand, ingredient, isEdit])
 
@@ -137,6 +155,25 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
       : await (supabase.from('ingredients') as any).insert(payload)
 
     if (dbErr) { setError(dbErr.message); setSaving(false); return }
+
+    const factorNum = parseFloat(convFactor)
+    if (buyUnit.trim() && factorNum > 0) {
+      await (supabase.from('unit_conversions') as any).upsert({
+        brand_id: brand,
+        ing_sku: sku.trim(),
+        ing_name: name.trim(),
+        buy_unit: buyUnit.trim(),
+        recipe_unit: unit.trim(),
+        factor: factorNum,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: 'brand_id,ing_sku' })
+    } else if (!buyUnit.trim() && isEdit) {
+      await (supabase.from('unit_conversions') as any)
+        .delete()
+        .eq('brand_id', brand)
+        .eq('ing_sku', sku.trim())
+    }
+
     onSaved()
   }
 
@@ -200,7 +237,7 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
                 </div>
               ) : (
                 <div className="bg-gray-50 border border-gray-200 rounded-lg overflow-hidden">
-                  <table className="w-full text-xs">
+                  <table suppressHydrationWarning className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-gray-200 text-gray-500 bg-gray-100">
                         <th className="text-right px-3 py-2">الشهر</th>
@@ -251,6 +288,46 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
               )}
             </div>
           )}
+
+          <div className="border-t border-gray-200 pt-4">
+            <p className="text-xs font-medium text-gray-600 mb-3">تحويل وحدة الشراء <span className="text-gray-400 font-normal">(اختياري)</span></p>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">وحدة الشراء</label>
+                <input
+                  value={buyUnit}
+                  onChange={e => setBuyUnit(e.target.value)}
+                  placeholder="علبة / كيلو / كرتون"
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  معامل التحويل
+                </label>
+                <input
+                  type="number"
+                  value={convFactor}
+                  onChange={e => setConvFactor(e.target.value)}
+                  placeholder="1000"
+                  min="0.001"
+                  step="any"
+                  dir="ltr"
+                  className={`${inputCls} font-mono`}
+                />
+              </div>
+            </div>
+            {buyUnit.trim() && parseFloat(convFactor) > 0 && (
+              <p className="text-xs text-blue-600 mt-2 bg-blue-50 rounded-lg px-3 py-1.5">
+                1 {buyUnit} = {convFactor} {unit || 'وحدة'}
+              </p>
+            )}
+            {!buyUnit.trim() && isEdit && (
+              <p className="text-xs text-gray-400 mt-1.5">
+                احذف وحدة الشراء لإزالة التحويل
+              </p>
+            )}
+          </div>
 
           {error && (
             <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-3 py-2">{error}</div>

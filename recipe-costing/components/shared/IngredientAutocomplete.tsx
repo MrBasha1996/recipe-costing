@@ -1,9 +1,10 @@
 'use client'
+import type { BrandId } from '@/types'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { createClient } from '@/lib/supabase/client'
-import { useBrandStore } from '@/stores/brandStore'
+import { useParams } from 'next/navigation'
 import type { ComponentItem, Ingredient } from '@/types'
 
 interface Props {
@@ -12,7 +13,7 @@ interface Props {
 }
 
 export default function IngredientAutocomplete({ onSelect, placeholder = 'أضف مكوّن...' }: Props) {
-  const { brand } = useBrandStore()
+  const { brand } = useParams() as { brand: BrandId }
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<ComponentItem[]>([])
   const [open, setOpen] = useState(false)

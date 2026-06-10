@@ -17,7 +17,7 @@ export default function ProductTable({ products, canEdit, canSeePrices, onEdit, 
 
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-      <table className="w-full text-sm">
+      <table suppressHydrationWarning className="w-full text-sm">
         <thead>
           <tr className="border-b border-gray-200 text-gray-500 text-xs bg-gray-50">
             <th className="text-right px-4 py-3 font-medium">الاسم</th>

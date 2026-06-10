@@ -1,0 +1,20 @@
+{
+  "name": "نظام تكاليف الوصفات",
+  "short_name": "التكاليف",
+  "description": "نظام تكاليف الوصفات",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e1f2e",
+  "theme_color": "#0e1f2e",
+  "orientation": "any",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

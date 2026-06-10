@@ -1,85 +1,106 @@
-# خطة: تحويل الصفحات إلى Server Components (الحل الجذري للبطء)
+# خطة: 5 مهام لإكمال نظام recipe-costing
 
-## الهدف
-كل صفحة الآن تجلب بياناتها بعد الـ mount في المتصفح → المستخدم يرى "جارٍ التحميل..." في كل تنقل.
-الحل: تُجلب البيانات على السيرفر قبل إرسال الصفحة للمتصفح → المستخدم يرى المحتوى مباشرة.
+---
 
-## النمط المتبع لكل صفحة
-```
-قبل:  page.tsx ('use client') → useEffect → DB query → render
-بعد:  page.tsx (Server) → DB query → PageClient.tsx ('use client' فقط للتفاعل)
-```
+## المهام
 
-## المتطلبات الأساسية (Phase 1)
+### A. إنشاء migration 013 (expiry + suppliers) كملف رسمي
+- [ ] نسخ `tasks/migration_expiry_suppliers.sql` إلى `supabase/migrations/013_expiry_suppliers.sql`
 
-### 1. تخزين brand في Cookie
-- [ ] تعديل `stores/brandStore.ts` → كتابة cookie عند كل تغيير brand
-- [ ] تعديل `app/(dashboard)/DashboardShell.tsx` → استدعاء `router.refresh()` عند تغيير brand حتى تتحدث بيانات السيرفر
+### B. إنشاء migration 014 (labor department + monthly_budgets)
+- [ ] إنشاء `supabase/migrations/014_labor_budget.sql` يحتوي:
+  - `ALTER TABLE labor_costs ADD COLUMN IF NOT EXISTS department text DEFAULT 'other'`
+  - `CREATE TABLE monthly_budgets` (brand_id, month, revenue_target, fc_pct_target, labor_pct_target, overhead_pct_target)
+  - RLS على monthly_budgets
 
-### 2. مساعد قراءة brand من السيرفر
-- [ ] إنشاء `lib/server-brand.ts` → دالة `getServerBrand()` تقرأ brand من الـ cookie
+### C. تتبع تكاليف العمالة بالتفصيل (Department)
+- [ ] إضافة `LaborDept` type وقائمة الأقسام في `costs/page.tsx`
+- [ ] إضافة dropdown اختيار القسم في نموذج إضافة بند العمالة
+- [ ] تعديل جدول العمالة: عمود القسم + تجميع بصري حسب القسم
 
-## تحويل الصفحات (Phase 2)
+### D. Budget vs Actual
+- [ ] إضافة tab جديد "الميزانية" في `costs/page.tsx`
+- [ ] نموذج إدخال: إيراد مستهدف + FC%‌ مستهدف + عمالة% مستهدفة + ثابتة% مستهدفة
+- [ ] عرض مقارنة الفعلي vs الميزانية (يجلب المبيعات + التكاليف الفعلية للشهر المختار)
 
-### صفحة products
-- [ ] إنشاء `app/(dashboard)/products/ProductsClient.tsx` (الكود الحالي بدون load/useEffect + يقبل initialProducts)
-- [ ] تحويل `app/(dashboard)/products/page.tsx` → Server Component يجلب البيانات
-- [ ] إضافة `app/(dashboard)/products/loading.tsx`
+### E. PAR Level alerts (تنبيهات المخزون)
+- [ ] إضافة banner في تبويب "المخزون" في `InventoryClient.tsx` يظهر عدد الأصناف تحت مستوى PAR
+- [ ] تطوير تبويب "طلبات الشراء" (orders) ليعرض جدول: الصنف + الكمية الحالية + مستوى PAR + الفجوة + التكلفة التقديرية
 
-### صفحة ingredients
-- [ ] إنشاء `app/(dashboard)/ingredients/IngredientsClient.tsx`
-- [ ] تحويل `app/(dashboard)/ingredients/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/ingredients/loading.tsx`
+### F. تحويل صفحات Client → Server Components
+- [ ] `costs/page.tsx` → Server + `CostsClient.tsx` + `loading.tsx`
+- [ ] `reports/page.tsx` → Server + `ReportsClient.tsx` + `loading.tsx`
+- [ ] `settings/page.tsx` → Server + `SettingsClient.tsx` + `loading.tsx`
+- [ ] `costing/page.tsx` — تخطي (لا يجلب بيانات من DB، يستخدم Zustand فقط)
 
-### صفحة waste (+ إصلاح recharts)
-- [ ] إنشاء `app/(dashboard)/waste/WasteClient.tsx`
-- [ ] تحويل `app/(dashboard)/waste/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/waste/loading.tsx`
+---
 
-### صفحة purchasing
-- [ ] إنشاء `app/(dashboard)/purchasing/PurchasingClient.tsx`
-- [ ] تحويل `app/(dashboard)/purchasing/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/purchasing/loading.tsx`
+## ترتيب التنفيذ
+1. B (migrations) أولاً — الأساس
+2. C + D معاً (تعديل costs page)
+3. E (inventory)
+4. F (server components)
+5. A (نسخ migration 013)
 
-### صفحة sales
-- [ ] إنشاء `app/(dashboard)/sales/SalesClient.tsx`
-- [ ] تحويل `app/(dashboard)/sales/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/sales/loading.tsx`
+---
 
-### صفحة inventory (4 queries → أكبر أثر)
-- [ ] إنشاء `app/(dashboard)/inventory/InventoryClient.tsx`
-- [ ] تحويل `app/(dashboard)/inventory/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/inventory/loading.tsx`
+## ملاحظات Migrations للمستخدم
+بعد الانتهاء يجب تشغيل هذه في Supabase Dashboard → SQL Editor **بالترتيب**:
+1. `supabase/migrations/012_rls_rbac_v2.sql`
+2. `supabase/migrations/013_expiry_suppliers.sql`
+3. `supabase/migrations/014_labor_budget.sql`
 
-### صفحة dashboard (8 queries → الأعقد)
-- [ ] إنشاء `app/(dashboard)/dashboard/DashboardClient.tsx`
-- [ ] تحويل `app/(dashboard)/dashboard/page.tsx` → Server Component
-- [ ] إضافة `app/(dashboard)/dashboard/loading.tsx`
+---
 
-## مراجعة
+## مراجعة — 2026-06-09 (استيراد + تحويل وحدات) ✅
 
-### ما تم إنجازه
-تم تحويل **7 صفحات** من Client-side data fetching إلى Server Components:
+### ما تغيّر
 
-| الصفحة | الملفات الجديدة | الاستعلامات المحوّلة |
-|--------|-----------------|----------------------|
-| products | ProductsClient.tsx, loading.tsx | 1 |
-| ingredients | IngredientsClient.tsx, loading.tsx | 1 |
-| waste | WasteClient.tsx, WasteAnalysis.tsx, loading.tsx | 1 (+ dynamic recharts) |
-| purchasing | PurchasingClient.tsx, loading.tsx | 2 parallel |
-| sales | SalesClient.tsx, loading.tsx | 1 batch summary |
-| inventory | InventoryClient.tsx, loading.tsx | 4 parallel |
-| dashboard | DashboardClient.tsx, loading.tsx | 10 parallel |
+| الملف | التغيير |
+|---|---|
+| `types/index.ts` | إضافة `UnitConversion` interface |
+| `app/(dashboard)/ingredients/page.tsx` | جلب `unit_conversions` بالتوازي مع `ingredients` |
+| `app/(dashboard)/ingredients/IngredientsClient.tsx` | زر **قالب استيراد** جديد + تمرير `convMap` للجدول |
+| `components/ingredients/IngredientTable.tsx` | عمودان: **وحدة الوصفة** + **وحدة الشراء** (مع المعامل) |
+| `components/ingredients/IngredientForm.tsx` | قسم "تحويل وحدة الشراء": يحمّل ويحفظ ويحذف من `unit_conversions` |
 
-### الآلية
-- `getServerBrand()` في `lib/server-brand.ts` يقرأ brand من cookie
-- `brandStore.setBrand/pickBrand` يكتب cookie حتى يقرأه السيرفر
-- `router.refresh()` يُطلق إعادة تنفيذ Server Components عند تغيير brand أو بعد أي mutation
-- `useEffect([initialData])` في كل Client داخلي يزامن الحالة عندما يُعيد السيرفر بيانات جديدة
-- `loading.tsx` يظهر skeleton فوري أثناء تحميل السيرفر (Suspense)
+### كيف يعمل
+- **قالب الاستيراد**: زر "⬇ قالب استيراد" يحمّل ملف Excel بأعمدة (SKU، الاسم، الفئة، الوحدة، التكلفة) — جاهز للتعبئة وإعادة الرفع بزر "⬆ استيراد بيانات"
+- **جدول المواد الخام**: يعرض الآن عمودين — وحدة الوصفة (مثل جرام) + وحدة الشراء (مثل علبة ×1000)
+- **نموذج التعديل**: قسم "تحويل وحدة الشراء" في أسفل النموذج — احذف وحدة الشراء لإزالة التحويل تلقائياً
+- **TypeScript**: نظيف (0 أخطاء)
 
-### ما يجب معرفته
-- **recharts**: مُحمَّل بـ `dynamic()` في WasteClient — يُحمَّل فقط عند فتح تبويب التحليل
-- **OpsSnapshot refresh**: زر التحديث يستدعي `router.refresh()` بدلاً من re-fetch مباشر
-- **الصفحات المتبقية** (costs, reports, settings, costing) تعمل بالنمط القديم — يمكن تحويلها لاحقاً إذا احتاجت
-- **الجرد الدوري (Stocktake)** يجلب بياناته بشكل lazy عند فتح التبويب — هذا مقصود
+---
+
+## مراجعة — 2026-06-09 ✅
+
+### ما تغيّر
+
+| الملف / المجال | التغيير |
+|---|---|
+| `supabase/migrations/013_expiry_suppliers.sql` | نسخة رسمية من tasks/migration_expiry_suppliers.sql |
+| `supabase/migrations/014_labor_budget.sql` | جديد: عمود department في labor_costs + جدول monthly_budgets + RLS |
+| `types/index.ts` | إضافة `LaborDept` + تحديث `LaborCost` (department) + `MonthlyBudget` |
+| `app/(dashboard)/costs/CostsClient.tsx` | جديد: accepts initial props + department في العمالة + tab الميزانية |
+| `app/(dashboard)/costs/page.tsx` | حُوِّل إلى Server Component |
+| `app/(dashboard)/costs/loading.tsx` | جديد: skeleton loading |
+| `app/(dashboard)/inventory/InventoryClient.tsx` | PAR banner أحمر + badge عدد على تبويب "طلبات الشراء" |
+| `app/(dashboard)/settings/SettingsClient.tsx` | جديد: accepts initial props بدون useEffect |
+| `app/(dashboard)/settings/page.tsx` | حُوِّل إلى Server Component |
+| `app/(dashboard)/settings/loading.tsx` | جديد |
+| `app/(dashboard)/reports/ReportsClient.tsx` | جديد: accepts initialBranches + initialFcLow/High |
+| `app/(dashboard)/reports/page.tsx` | حُوِّل إلى Server Component |
+| `app/(dashboard)/reports/loading.tsx` | جديد |
+| `app/api/*/route.ts` (6 ملفات) | إصلاح Zod v4: `.errors` → `.issues` |
+
+### Migrations يجب تشغيلها في Supabase Dashboard → SQL Editor
+**بالترتيب:**
+1. `supabase/migrations/012_rls_rbac_v2.sql`
+2. `supabase/migrations/013_expiry_suppliers.sql`
+3. `supabase/migrations/014_labor_budget.sql`
+
+### ملاحظات
+- **تبويب الميزانية**: يظهر الفعلي vs الهدف للإيراد + العمالة% + الثابتة%. FC% يستلزم تقرير P&L.
+- **PAR alerts**: يستخدم الحقل الموجود `min_qty` — لا يحتاج تغيير DB.
+- **costing/page.tsx**: لم يُحوَّل (لا يجلب بيانات من DB — Zustand فقط).
+- **TypeScript**: نظيف تماماً (0 أخطاء).

@@ -67,7 +67,7 @@ export default function RecipeFoodTable({
 
       {/* Table */}
       <div style={{ overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+        <table suppressHydrationWarning style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: `1.5px solid ${C.border}` }}>
               <th style={th}>Item ID</th>

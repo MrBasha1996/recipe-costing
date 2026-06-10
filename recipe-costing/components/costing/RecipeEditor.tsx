@@ -1,10 +1,11 @@
 'use client'
+import type { BrandId } from '@/types'
 
 import { useEffect, useState, useMemo, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { qc, cacheKey } from '@/lib/queryCache'
 import { useCostingStore } from '@/stores/costingStore'
-import { useBrandStore } from '@/stores/brandStore'
+import { useParams } from 'next/navigation'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
 import { calcServiceCost, FC_TARGET, VAT_RATE } from '@/lib/calculations'
@@ -46,7 +47,7 @@ const PRINT_PALETTE_PKG_DO = ['#c85a1e','#e8743b','#b04010','#d06030','#a03000',
 // ── component ─────────────────────────────────────────────────────
 
 export default function RecipeEditor() {
-  const { brand } = useBrandStore()
+  const { brand } = useParams() as { brand: BrandId }
   const {
     currentProduct, rows, setRows, savedRecipe, setSavedRecipe,
     addRow, updateRow, removeRow,
@@ -91,6 +92,7 @@ export default function RecipeEditor() {
       .select('id, version, version_name, is_active, is_approved, saved_at, food_cost_pct')
       .eq('sku', currentProduct.sku)
       .eq('brand_id', brand as string)
+      .eq('is_semi', !!currentProduct.is_semi)
       .order('version', { ascending: false })
     setVersions((data as RecipeVersion[]) || [])
   }, [currentProduct, brand])
@@ -117,6 +119,7 @@ export default function RecipeEditor() {
         .select('*, recipe_ingredients(*)')
         .eq('sku', currentProduct.sku)
         .eq('brand_id', brand as string)
+        .eq('is_semi', !!currentProduct.is_semi)
         .eq('is_active', true)
         .maybeSingle()
       if (active) {
@@ -127,6 +130,7 @@ export default function RecipeEditor() {
           .select('*, recipe_ingredients(*)')
           .eq('sku', currentProduct.sku)
           .eq('brand_id', brand as string)
+          .eq('is_semi', !!currentProduct.is_semi)
           .order('saved_at', { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -365,6 +369,7 @@ export default function RecipeEditor() {
         .update({ is_active: false })
         .eq('sku', currentProduct.sku)
         .eq('brand_id', brand as string)
+        .eq('is_semi', !!currentProduct.is_semi)
         .neq('id', savedRecipe.id)
       await loadVersions()
       setSaveMsg({ ok: true, text: 'تم تفعيل هذا الإصدار ✓' })
@@ -411,6 +416,7 @@ export default function RecipeEditor() {
       if (error) throw error
 
       qc.bustPrefix(cacheKey.recipes(brand as string))
+      qc.bustPrefix(cacheKey.batchRecipes(brand as string))
       await loadVersions()
 
       // بعد الحذف: حمّل الإصدار النشط إن وجد، وإلا أعد التهيئة
@@ -1200,7 +1206,7 @@ function PrintTable({ rows, canSeeP }: { rows: RecipeRowDraft[]; canSeeP: boolea
   const subtotal = rows.reduce((s, r) => s + (r.qty / (r.yield_pct / 100)) * r.unit_cost, 0)
   const cols = canSeeP ? 7 : 5
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px', border: '1px solid #e2e4e8', borderRadius: '6px', overflow: 'hidden' }}>
+    <table suppressHydrationWarning style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10px', border: '1px solid #e2e4e8', borderRadius: '6px', overflow: 'hidden' }}>
       <thead>
         <tr style={{ background: '#1a3a4a', color: 'white' }}>
           <th style={{ textAlign: 'right', padding: '5px 8px', fontWeight: '600', fontSize: '9px' }}>المكوّن</th>
@@ -1573,7 +1579,7 @@ function KitchenIngTable({ rows, emptyMsg }: { rows: RecipeRowDraft[]; emptyMsg?
     return <p style={{ color: '#9ca3af', fontSize: '10px', margin: '4px 0 10px' }}>{emptyMsg ?? 'لا يوجد'}</p>
   }
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10.5px', marginBottom: '12px' }}>
+    <table suppressHydrationWarning style={{ width: '100%', borderCollapse: 'collapse', fontSize: '10.5px', marginBottom: '12px' }}>
       <thead>
         <tr style={{ background: '#1a3a4a', color: 'white' }}>
           <th style={{ textAlign: 'right', padding: '5px 10px', fontWeight: '600' }}>المكوّن</th>

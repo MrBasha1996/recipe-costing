@@ -1,19 +1,33 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
+import { requireBrandAccess, isAuthError } from '@/lib/auth'
+
+const BodySchema = z.object({
+  brand_id:     z.string().min(1),
+  import_batch: z.string().uuid(),
+})
 
 /**
  * POST /api/sales/explode-check
  * تحليل دفعة مبيعات بدون كتابة: يكشف المنتجات بلا وصفة،
  * الباتشات الناقصة، والمواد الخام الغير كافية.
- *
- * Body: { brand_id, import_batch }
  */
 export async function POST(request: NextRequest) {
-  const { brand_id, import_batch } = await request.json()
-  if (!brand_id || !import_batch) {
-    return NextResponse.json({ error: 'brand_id و import_batch مطلوبان' }, { status: 400 })
+  let body: unknown
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'Body غير صالح' }, { status: 400 })
   }
 
+  const parsed = BodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
+  }
+
+  const user = await requireBrandAccess(parsed.data.brand_id)
+  if (isAuthError(user)) return user
+
+  const { brand_id, import_batch } = parsed.data
   const admin = createAdminClient()
 
   // ── 1. تجميع المبيعات ─────────────────────────────────────────────
@@ -45,7 +59,6 @@ export async function POST(request: NextRequest) {
   for (const r of (recipes || []) as any[])
     recipeMap.set(r.sku, { id: r.id, yield_portions: Math.max(r.yield_portions, 1) })
 
-  // المنتجات بلا وصفة
   const missing_recipes = productSkus
     .filter(sku => !recipeMap.has(sku))
     .map(sku => ({ sku, name: saleMap.get(sku)?.name ?? sku }))
@@ -66,8 +79,7 @@ export async function POST(request: NextRequest) {
     .select('recipe_id, ing_sku, ing_name, qty, yield_pct, unit, is_semi')
     .in('recipe_id', recipeIds)
 
-  // ── 4. تجميع الاحتياجات (خام + باتش) ────────────────────────────
-  // rawNeeds: ing_sku → { name, unit, needed }
+  // ── 4. تجميع الاحتياجات ──────────────────────────────────────────
   const rawNeeds  = new Map<string, { name: string; unit: string; needed: number }>()
   const batchNeeds = new Map<string, { name: string; unit: string; needed: number }>()
 
@@ -91,7 +103,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ── 5. فحص مخزون الباتشات ────────────────────────────────────────
+  // ── 5. فحص مخزون الباتشات والخام ─────────────────────────────────
   const allCheckSkus = [...rawNeeds.keys(), ...batchNeeds.keys()]
   const { data: stockRows } = await (admin.from('stock_items') as any)
     .select('ing_sku, current_qty, unit')
@@ -101,7 +113,6 @@ export async function POST(request: NextRequest) {
   const stockMap = new Map<string, number>()
   for (const s of (stockRows || []) as any[]) stockMap.set(s.ing_sku, s.current_qty)
 
-  // هل للباتش وصفة نشطة (يمكن إنتاجه)؟
   const batchSkus = [...batchNeeds.keys()]
   let producibleBatches = new Set<string>()
   if (batchSkus.length) {
@@ -126,7 +137,6 @@ export async function POST(request: NextRequest) {
     }
   })
 
-  // ── 6. فحص مخزون المواد الخام ─────────────────────────────────────
   const low_ingredients = [...rawNeeds.entries()]
     .map(([sku, info]) => {
       const in_stock = stockMap.get(sku) ?? 0

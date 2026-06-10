@@ -1,12 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
+import { requireBrandAccess, isAuthError } from '@/lib/auth'
+
+const BodySchema = z.object({
+  brand_id:     z.string().min(1),
+  import_batch: z.string().uuid(),
+  performed_by: z.string().optional().nullable(),
+})
 
 /**
  * POST /api/purchases/apply
  * Applies a purchase batch using Weighted Average Cost (WAC).
  *
- * Body: { brand_id: string, import_batch: string, performed_by?: string }
+ * Body: { brand_id, import_batch, performed_by? }
  *
  * For each purchased ingredient:
  *   WAC = (stock_qty × old_cost + purchased_qty × purchase_price) / (stock_qty + purchased_qty)
@@ -16,14 +23,20 @@ import { createClient } from '@/lib/supabase/server'
  *   - Records price changes in price_history
  */
 export async function POST(request: NextRequest) {
-  const serverClient = await createClient()
-  const { data: { user } } = await serverClient.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-
-  const { brand_id, import_batch, performed_by } = await request.json()
-  if (!brand_id || !import_batch) {
-    return NextResponse.json({ error: 'brand_id و import_batch مطلوبان' }, { status: 400 })
+  let body: unknown
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'Body غير صالح' }, { status: 400 })
   }
+
+  const parsed = BodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
+  }
+
+  const user = await requireBrandAccess(parsed.data.brand_id)
+  if (isAuthError(user)) return user
+
+  const { brand_id, import_batch, performed_by } = parsed.data
 
   const admin = createAdminClient()
 

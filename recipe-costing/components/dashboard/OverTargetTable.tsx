@@ -15,7 +15,7 @@ export default function OverTargetTable({ recipes }: Props) {
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table suppressHydrationWarning className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-200 text-xs text-gray-500 bg-gray-50">
               <th className="text-right px-4 py-2 font-medium">المنتج</th>

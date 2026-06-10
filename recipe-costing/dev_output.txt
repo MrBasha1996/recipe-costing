@@ -1,0 +1,250 @@
+
+> recipe-costing@0.1.0 dev
+> next dev
+
+   ▲ Next.js 15.5.18
+   - Local:        http://localhost:3000
+   - Network:      http://192.168.8.147:3000
+   - Environments: .env.local
+
+ ✓ Starting...
+ ✓ Ready in 2.7s
+ ○ Compiling /middleware ...
+ ✓ Compiled /middleware in 1990ms (169 modules)
+<w> [webpack.cache.PackFileCacheStrategy] Serializing big strings (101kiB) impacts deserialization performance (consider using Buffer instead and decode when needed)
+<w> [webpack.cache.PackFileCacheStrategy] Serializing big strings (231kiB) impacts deserialization performance (consider using Buffer instead and decode when needed)
+ ○ Compiling / ...
+ ✓ Compiled / in 2.7s (631 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 652ms (229 modules)
+ ✓ Compiled in 110ms (229 modules)
+ ✓ Compiled in 116ms (229 modules)
+ ✓ Compiled in 70ms (229 modules)
+ ✓ Compiled in 70ms (229 modules)
+ ✓ Compiled in 64ms (229 modules)
+ ✓ Compiled in 106ms (229 modules)
+ ✓ Compiled in 71ms (229 modules)
+ ✓ Compiled in 64ms (229 modules)
+ ✓ Compiled in 115ms (229 modules)
+ ✓ Compiled in 68ms (229 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 131ms (229 modules)
+ GET / 307 in 4794ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 83ms (229 modules)
+ ✓ Compiled in 327ms (229 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 328ms (229 modules)
+ GET / 307 in 1322ms
+ ✓ Compiled in 256ms (229 modules)
+ ○ Compiling /[brand]/costing ...
+ ✓ Compiled /[brand]/costing in 5.9s (892 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 10373ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 3474ms
+ ○ Compiling /login ...
+ ✓ Compiled /login in 799ms (885 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /login. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /login 200 in 1387ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /login. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /login 200 in 161ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 3052ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /login. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /login 200 in 212ms
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /login. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /login 200 in 213ms
+ ✓ Compiled in 272ms (338 modules)
+ ✓ Compiled in 154ms (338 modules)
+ ✓ Compiled in 155ms (338 modules)
+ ✓ Compiled in 113ms (338 modules)
+ ✓ Compiled in 115ms (338 modules)
+ ✓ Compiled in 150ms (338 modules)
+ ✓ Compiled in 164ms (338 modules)
+ ✓ Compiled in 129ms (338 modules)
+ ✓ Compiled in 153ms (338 modules)
+ ✓ Compiled in 170ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 298ms (338 modules)
+ ✓ Compiled in 114ms (338 modules)
+ ✓ Compiled in 120ms (338 modules)
+ ✓ Compiled in 139ms (338 modules)
+ GET /bb/costing 200 in 1630ms
+ ✓ Compiled in 119ms (338 modules)
+ ✓ Compiled in 110ms (338 modules)
+ ✓ Compiled in 145ms (338 modules)
+ ✓ Compiled in 106ms (338 modules)
+ ✓ Compiled in 214ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 98ms (338 modules)
+ ✓ Compiled in 147ms (338 modules)
+ GET /bb/costing 200 in 1380ms
+ ✓ Compiled in 132ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 43ms
+ ✓ Compiled in 176ms (338 modules)
+ ✓ Compiled in 126ms (338 modules)
+ ✓ Compiled in 131ms (338 modules)
+ ✓ Compiled in 132ms (338 modules)
+ ✓ Compiled in 112ms (338 modules)
+ ✓ Compiled in 120ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 61ms
+ ✓ Compiled in 146ms (338 modules)
+ ✓ Compiled in 98ms (338 modules)
+ ✓ Compiled in 141ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 70ms
+ ✓ Compiled in 130ms (338 modules)
+ ✓ Compiled in 141ms (338 modules)
+ ✓ Compiled in 119ms (338 modules)
+ ✓ Compiled in 113ms (338 modules)
+ ✓ Compiled in 114ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 140ms
+ ✓ Compiled in 147ms (338 modules)
+ ✓ Compiled in 90ms (338 modules)
+ ✓ Compiled in 157ms (338 modules)
+ ✓ Compiled in 119ms (338 modules)
+ ✓ Compiled in 155ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 46ms
+ ✓ Compiled in 143ms (338 modules)
+ ✓ Compiled in 190ms (338 modules)
+ ✓ Compiled in 145ms (338 modules)
+ ✓ Compiled in 245ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 166ms (338 modules)
+ GET /bb/costing 200 in 83ms
+ ✓ Compiled in 162ms (338 modules)
+ ✓ Compiled in 142ms (338 modules)
+ ✓ Compiled in 136ms (338 modules)
+ ✓ Compiled in 137ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 50ms
+ ✓ Compiled in 84ms (338 modules)
+ ✓ Compiled in 154ms (338 modules)
+ ✓ Compiled in 149ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ GET /bb/costing 200 in 67ms
+ ✓ Compiled in 147ms (338 modules)
+ ⚠ Unsupported metadata themeColor is configured in metadata export in /[brand]/costing. Please move it to viewport export instead.
+Read more: https://nextjs.org/docs/app/api-reference/functions/generate-viewport
+ ✓ Compiled in 208ms (338 modules)
+ GET /bb/costing 200 in 233ms
+ ✓ Compiled in 90ms (338 modules)
+ ✓ Compiled in 90ms (338 modules)
+ ✓ Compiled in 87ms (338 modules)
+ ✓ Compiled in 94ms (338 modules)
+ ✓ Compiled in 91ms (338 modules)
+ ✓ Compiled in 107ms (338 modules)
+ ✓ Compiled in 77ms (338 modules)
+ ✓ Compiled in 93ms (338 modules)
+ ✓ Compiled in 88ms (338 modules)
+ ✓ Compiled in 95ms (338 modules)
+ ✓ Compiled in 77ms (338 modules)
+ ✓ Compiled in 94ms (338 modules)
+ ✓ Compiled in 92ms (338 modules)
+ ✓ Compiled in 110ms (338 modules)
+ ✓ Compiled in 89ms (338 modules)
+ ✓ Compiled in 91ms (338 modules)
+ ✓ Compiled in 96ms (338 modules)
+ ✓ Compiled in 94ms (338 modules)
+ ✓ Compiled in 93ms (338 modules)
+ ✓ Compiled in 102ms (338 modules)
+ ✓ Compiled in 88ms (338 modules)
+ ✓ Compiled in 92ms (338 modules)
+ ✓ Compiled in 85ms (338 modules)
+ ✓ Compiled in 85ms (338 modules)
+ ✓ Compiled in 76ms (338 modules)
+ ✓ Compiled in 86ms (338 modules)
+ ✓ Compiled in 86ms (338 modules)
+ ✓ Compiled in 110ms (338 modules)
+ ✓ Compiled in 84ms (338 modules)
+ ✓ Compiled in 92ms (338 modules)
+ ✓ Compiled in 86ms (338 modules)
+ ✓ Compiled in 100ms (338 modules)
+ ✓ Compiled in 84ms (338 modules)
+ ✓ Compiled in 111ms (338 modules)
+ ✓ Compiled in 140ms (338 modules)
+ ✓ Compiled in 180ms (338 modules)
+ ✓ Compiled in 94ms (338 modules)
+ ✓ Compiled in 146ms (338 modules)
+ ✓ Compiled in 104ms (338 modules)
+ ✓ Compiled in 121ms (338 modules)
+ ✓ Compiled in 124ms (338 modules)
+ ✓ Compiled in 146ms (338 modules)
+ ✓ Compiled in 126ms (338 modules)
+ ✓ Compiled in 121ms (338 modules)
+ ✓ Compiled in 116ms (338 modules)
+ ✓ Compiled in 125ms (338 modules)
+ ✓ Compiled in 121ms (338 modules)
+ ✓ Compiled in 133ms (338 modules)
+ ✓ Compiled in 132ms (338 modules)
+ ✓ Compiled in 171ms (338 modules)
+ ✓ Compiled in 130ms (338 modules)
+ ✓ Compiled in 101ms (338 modules)
+ ✓ Compiled in 88ms (338 modules)
+ ✓ Compiled in 138ms (338 modules)
+ ✓ Compiled in 167ms (338 modules)
+ ✓ Compiled in 159ms (338 modules)
+ ✓ Compiled in 152ms (338 modules)
+ ✓ Compiled in 116ms (338 modules)
+ ✓ Compiled in 182ms (338 modules)
+ ✓ Compiled in 185ms (338 modules)
+ ✓ Compiled in 133ms (338 modules)
+ ✓ Compiled in 126ms (338 modules)
+ ✓ Compiled in 123ms (338 modules)
+ ✓ Compiled in 143ms (338 modules)
+ ✓ Compiled in 158ms (338 modules)
+ ✓ Compiled in 153ms (338 modules)
+ ✓ Compiled in 106ms (338 modules)
+ ✓ Compiled in 116ms (338 modules)
+ ✓ Compiled in 140ms (338 modules)
+ ✓ Compiled in 165ms (338 modules)
+ ✓ Compiled in 123ms (338 modules)
+ ✓ Compiled in 132ms (338 modules)
+ ✓ Compiled in 136ms (338 modules)
+ ✓ Compiled in 181ms (338 modules)
+ ✓ Compiled in 131ms (338 modules)
+ ✓ Compiled in 106ms (338 modules)
+ ✓ Compiled in 322ms (338 modules)
+ ✓ Compiled in 260ms (338 modules)
+ ✓ Compiled in 297ms (338 modules)
+ ✓ Compiled in 310ms (338 modules)
+ ✓ Compiled in 302ms (338 modules)
+ ✓ Compiled in 323ms (338 modules)
+ ✓ Compiled in 323ms (338 modules)
+ ✓ Compiled in 367ms (338 modules)
+ ✓ Compiled in 287ms (338 modules)
+ ✓ Compiled in 298ms (338 modules)
+ ✓ Compiled in 328ms (338 modules)
+ ✓ Compiled in 312ms (338 modules)
+ ✓ Compiled in 314ms (338 modules)
+ ✓ Compiled in 303ms (338 modules)
+ ✓ Compiled in 623ms (338 modules)
+ ✓ Compiled in 613ms (338 modules)
+ ✓ Compiled in 910ms (876 modules)
+ ✓ Compiled in 121ms (330 modules)

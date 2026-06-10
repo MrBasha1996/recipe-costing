@@ -42,8 +42,9 @@ export const qc = new QueryCache()
 
 // Key helpers — keep naming consistent across all callers
 export const cacheKey = {
-  products:    (brand: string) => `products:${brand}`,
-  ingredients: (brand: string) => `ingredients:${brand}`,
-  recipes:     (brand: string) => `recipes:${brand}`,
-  ingPrices:   (brand: string) => `ingPrices:${brand}`,
+  products:     (brand: string) => `products:${brand}`,
+  ingredients:  (brand: string) => `ingredients:${brand}`,
+  recipes:      (brand: string) => `recipes:${brand}`,
+  batchRecipes: (brand: string) => `batch-recipes:${brand}`,
+  ingPrices:    (brand: string) => `ingPrices:${brand}`,
 }

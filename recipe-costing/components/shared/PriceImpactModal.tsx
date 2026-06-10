@@ -1,8 +1,9 @@
 'use client'
+import type { BrandId } from '@/types'
 
 import { useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { useBrandStore } from '@/stores/brandStore'
+import { useParams } from 'next/navigation'
 import { useUserStore } from '@/stores/userStore'
 import type { PriceChange } from '@/lib/excel'
 
@@ -19,7 +20,7 @@ interface Props {
 }
 
 export default function PriceImpactModal({ changes, onClose, onApplied }: Props) {
-  const { brand } = useBrandStore()
+  const { brand } = useParams() as { brand: BrandId }
   const { profile } = useUserStore()
   const [affected, setAffected] = useState<AffectedRecipe[]>([])
   const [loadingImpact, setLoadingImpact] = useState(true)

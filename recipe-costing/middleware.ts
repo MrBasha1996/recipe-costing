@@ -1,28 +1,28 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const PATH_TO_MODULE: Record<string, string> = {
-  '/dashboard':   'dashboard',
-  '/costing':     'costing',
-  '/products':    'products',
-  '/ingredients': 'ingredients',
-  '/purchasing':  'purchasing',
-  '/sales':       'sales',
-  '/waste':       'waste',
-  '/costs':       'costs',
-  '/reports':     'reports',
-  '/comparison':  'comparison',
-  '/inventory':   'inventory',
-  '/users':       'users',
-  '/roles':       'roles',
-  '/settings':    'settings',
-}
+const VALID_BRANDS = ['ti', 'bb']
 
-function getModuleForPath(pathname: string): string | null {
-  for (const [path, mod] of Object.entries(PATH_TO_MODULE)) {
-    if (pathname.startsWith(path)) return mod
-  }
-  return null
+// Map path segment → module code for RBAC check
+const PATH_TO_MODULE: Record<string, string> = {
+  'dashboard':   'dashboard',
+  'costing':     'costing',
+  'products':    'products',
+  'ingredients': 'ingredients',
+  'purchasing':  'purchasing',
+  'sales':       'sales',
+  'waste':       'waste',
+  'costs':       'costs',
+  'reports':     'reports',
+  'comparison':  'comparison',
+  'inventory':   'inventory',
+  'batches':     'costing',
+  'production':  'production',
+  'suppliers':   'ingredients',
+  'users':       'users',
+  'roles':       'roles',
+  'settings':    'settings',
+  'conversions': 'ingredients',
 }
 
 export async function middleware(request: NextRequest) {
@@ -49,7 +49,7 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith('/login')) {
-    if (user) return NextResponse.redirect(new URL('/costing', request.url))
+    if (user) return NextResponse.redirect(new URL('/', request.url))
     return supabaseResponse
   }
 
@@ -57,19 +57,39 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  const moduleCode = getModuleForPath(pathname)
-  if (!moduleCode) return supabaseResponse
+  // Extract brand from URL: /{brand}/... → segments[1]
+  const segments = pathname.split('/').filter(Boolean)
+  const brandInUrl = segments[0]
+  const pageSegment = segments[1] // e.g. 'costing', 'batches', etc.
+
+  // Skip non-brand routes (API, etc.)
+  if (!brandInUrl || !VALID_BRANDS.includes(brandInUrl)) return supabaseResponse
 
   const { data: profile } = await (supabase.from('user_profiles') as any)
-    .select('role_id, roles(is_super_admin)')
+    .select('role_id, brand_access, roles(is_super_admin)')
     .eq('id', user.id)
     .single()
+
+  if (!profile) {
+    return NextResponse.redirect(new URL('/login', request.url))
+  }
+
+  const brandAccess = profile?.brand_access as string
+
+  // Enforce brand isolation: single-brand users must stay on their brand
+  if (brandAccess !== 'all' && brandInUrl !== brandAccess) {
+    const rest = segments.slice(1).join('/')
+    return NextResponse.redirect(new URL(`/${brandAccess}/${rest || 'costing'}`, request.url))
+  }
 
   if ((profile?.roles as any)?.is_super_admin) return supabaseResponse
 
   if (!profile?.role_id) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
+
+  const moduleCode = pageSegment ? PATH_TO_MODULE[pageSegment] : null
+  if (!moduleCode) return supabaseResponse
 
   const { data: perms } = await (supabase.from('role_permissions') as any)
     .select('can_view, modules!inner(code)')
@@ -78,7 +98,7 @@ export async function middleware(request: NextRequest) {
   const modulePerm = (perms as any[])?.find((p: any) => p.modules?.code === moduleCode)
 
   if (!modulePerm?.can_view) {
-    return NextResponse.redirect(new URL('/costing', request.url))
+    return NextResponse.redirect(new URL(`/${brandInUrl}/costing`, request.url))
   }
 
   return supabaseResponse

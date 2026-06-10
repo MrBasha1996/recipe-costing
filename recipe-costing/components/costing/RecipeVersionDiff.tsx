@@ -213,7 +213,7 @@ export default function RecipeVersionDiff({ open, onClose, versions, brand, prod
           ) : diff.length === 0 ? (
             <div className="flex items-center justify-center h-32 text-gray-400 text-sm">اختر إصدارَين للمقارنة</div>
           ) : (
-            <table className="w-full text-xs">
+            <table suppressHydrationWarning className="w-full text-xs">
               <thead className="sticky top-0 bg-gray-50 border-b border-gray-200">
                 <tr className="text-gray-500">
                   <th className="text-right px-4 py-2.5 font-medium">المكوّن</th>

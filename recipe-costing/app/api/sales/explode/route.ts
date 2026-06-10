@@ -1,32 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { createClient } from '@/lib/supabase/server'
+import { requireBrandAccess, isAuthError } from '@/lib/auth'
+import { executeBatchProduce } from '@/lib/produceBatch'
+
+const BodySchema = z.object({
+  brand_id:             z.string().min(1),
+  import_batch:         z.string().uuid(),
+  auto_produce_batches: z.boolean().optional().default(false),
+  performed_by:         z.string().uuid().nullable().optional().default(null),
+})
 
 /**
  * POST /api/sales/explode
  * Recipe Explosion: deducts ingredients from stock_items based on sales.
  *
- * Body: { brand_id: string, import_batch: string }
+ * Body: { brand_id, import_batch, auto_produce_batches?, performed_by? }
  *
  * Algorithm:
  * 1. Fetch all sales for the batch, grouped by product_sku
  * 2. For each product, find its active recipe + ingredients
- * 3. Calculate gross quantity to deduct per ingredient:
- *    deduct = qty_sold × (ing.qty / (ing.yield_pct/100)) / recipe.yield_portions
- * 4. Aggregate deductions across all products (same ingredient may appear in multiple recipes)
+ * 3. Calculate gross quantity to deduct per ingredient
+ * 4. Aggregate deductions across all products
  * 5. Upsert stock_items (reduce current_qty)
  * 6. Insert stock_movements for audit trail
  */
 export async function POST(request: NextRequest) {
-  const serverClient = await createClient()
-  const { data: { user } } = await serverClient.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
-
-  const { brand_id, import_batch, auto_produce_batches = false, performed_by = null } = await request.json()
-  if (!brand_id || !import_batch) {
-    return NextResponse.json({ error: 'brand_id و import_batch مطلوبان' }, { status: 400 })
+  let body: unknown
+  try { body = await request.json() } catch {
+    return NextResponse.json({ error: 'Body غير صالح' }, { status: 400 })
   }
 
+  const parsed = BodySchema.safeParse(body)
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
+  }
+
+  const user = await requireBrandAccess(parsed.data.brand_id)
+  if (isAuthError(user)) return user
+
+  const { brand_id, import_batch, auto_produce_batches, performed_by } = parsed.data
   const admin = createAdminClient()
 
   // ── 1. Fetch sales for this batch grouped by product_sku ──────────
@@ -38,7 +51,6 @@ export async function POST(request: NextRequest) {
   if (salesErr) return NextResponse.json({ error: salesErr.message }, { status: 500 })
   if (!sales?.length) return NextResponse.json({ exploded: 0, skipped: 0 })
 
-  // Group by product_sku → sum qty_sold
   const saleMap = new Map<string, number>()
   for (const s of sales as any[]) {
     saleMap.set(s.product_sku, (saleMap.get(s.product_sku) ?? 0) + s.qty_sold)
@@ -82,7 +94,6 @@ export async function POST(request: NextRequest) {
   for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
 
   // ── 4. Aggregate deductions per ingredient ────────────────────────
-  // deductMap: ing_sku → { ing_name, total_qty }
   const deductMap = new Map<string, { name: string; qty: number }>()
   let exploded = 0
   let skipped = 0
@@ -97,7 +108,6 @@ export async function POST(request: NextRequest) {
     exploded++
     for (const ing of recipeIngs as any[]) {
       if (ing.yield_pct <= 0) continue
-      // Gross quantity in recipe_unit per portion × qty_sold, then convert to buy_unit
       const grossPerPortion = ing.qty / (ing.yield_pct / 100) / recipe.yield_portions
       const factor = ucMap.get(ing.ing_sku) ?? 1
       const totalDeduct = (grossPerPortion * qtySold) / factor
@@ -115,69 +125,49 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ exploded, skipped, note: 'لا توجد مكونات للخصم' })
   }
 
-  // ── auto_produce: إنتاج الباتشات الناقصة قبل الخصم ───────────────
+  // ── 5. auto_produce: إنتاج الباتشات الناقصة قبل الخصم ───────────
   const produced_batches: { sku: string; name: string; qty: number }[] = []
 
   if (auto_produce_batches) {
-    // تحديد الباتشات المطلوبة (is_semi=true في المكونات)
-    const batchSkusNeeded = new Set<string>()
+    // تجميع احتياجات الباتشات من deductMap (is_semi=true)
+    const batchIngSkus = new Set<string>()
     for (const ing of (ingredients || []) as any[]) {
-      if (ing.is_semi) batchSkusNeeded.add(ing.ing_sku)
+      if (ing.is_semi) batchIngSkus.add(ing.ing_sku)
     }
 
-    if (batchSkusNeeded.size > 0) {
-      // احسب ما يحتاجه كل باتش
-      const batchNeedsMap = new Map<string, { name: string; qty: number }>()
-      for (const ing of (ingredients || []) as any[]) {
-        if (!ing.is_semi) continue
-        const recipe = [...recipeMap.values()].find(r => {
-          const recipeIngs = (ingredients || []).filter((i: any) => i.recipe_id === r.id)
-          return recipeIngs.some((i: any) => i.ing_sku === ing.ing_sku)
-        })
-        if (!recipe) continue
-        // جلب المبيعات التي تستخدم هذه الوصفة
-        for (const [pSku, r] of recipeMap) {
-          if (r.id !== (ingredients as any[]).find((i: any) => i.recipe_id === r.id && i.ing_sku === ing.ing_sku)?.recipe_id) continue
-          const qtySold = saleMap.get(pSku) ?? 0
-          if (!qtySold) continue
-          const needed = (ing.qty / (ing.yield_pct / 100)) / r.yield_portions * qtySold
-          const ex = batchNeedsMap.get(ing.ing_sku)
-          if (ex) ex.qty += needed
-          else batchNeedsMap.set(ing.ing_sku, { name: ing.ing_name, qty: needed })
-        }
-      }
-
+    if (batchIngSkus.size > 0) {
       // جلب المخزون الحالي للباتشات
       const { data: batchStocks } = await (admin.from('stock_items') as any)
         .select('ing_sku, current_qty')
         .eq('brand_id', brand_id)
-        .in('ing_sku', [...batchSkusNeeded])
+        .in('ing_sku', [...batchIngSkus])
 
       const batchStockMap = new Map<string, number>()
       for (const s of (batchStocks || []) as any[]) batchStockMap.set(s.ing_sku, s.current_qty)
 
       // أنتج كل باتش ناقص
-      for (const [bSku, bInfo] of batchNeedsMap) {
+      for (const [bSku, info] of deductMap) {
+        if (!batchIngSkus.has(bSku)) continue
         const inStock = batchStockMap.get(bSku) ?? 0
-        const deficit = bInfo.qty - inStock
+        const deficit = info.qty - inStock
         if (deficit <= 0) continue
 
-        const produceRes = await fetch(`${request.nextUrl.origin}/api/batches/produce`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cookie': request.headers.get('cookie') ?? '',
-          },
-          body: JSON.stringify({ brand_id, batch_sku: bSku, qty_portions: deficit, performed_by, note: `إنتاج تلقائي — دفعة ${import_batch.slice(0, 8)}` }),
+        const result = await executeBatchProduce(admin, {
+          brand_id,
+          batch_sku: bSku,
+          qty_portions: deficit,
+          performed_by: performed_by ?? null,
+          note: `إنتاج تلقائي — دفعة ${import_batch.slice(0, 8)}`,
         })
-        if (produceRes.ok) {
-          produced_batches.push({ sku: bSku, name: bInfo.name, qty: deficit })
+
+        if ('ok' in result) {
+          produced_batches.push({ sku: bSku, name: info.name, qty: deficit })
         }
       }
     }
   }
 
-  // ── 5. Fetch current stock_items for the affected SKUs ────────────
+  // ── 6. Fetch current stock_items for the affected SKUs ────────────
   const affectedSkus = [...deductMap.keys()]
   const { data: stockRows } = await (admin.from('stock_items') as any)
     .select('id, ing_sku, current_qty, min_qty, unit')
@@ -189,7 +179,7 @@ export async function POST(request: NextRequest) {
     stockMap.set(s.ing_sku, { id: s.id, current_qty: s.current_qty, min_qty: s.min_qty, unit: s.unit })
   }
 
-  // ── 6. Upsert stock_items + insert movements ──────────────────────
+  // ── 7. Upsert stock_items + insert movements ──────────────────────
   const upsertRows: any[] = []
   const movementRows: any[] = []
   const note = `خصم تلقائي — دفعة ${import_batch.slice(0, 8)}`
@@ -216,7 +206,7 @@ export async function POST(request: NextRequest) {
       movement_type: 'out',
       qty:           Math.round(qty * 1000) / 1000,
       note,
-      performed_by,
+      performed_by: performed_by ?? null,
     })
   }
 
@@ -227,7 +217,6 @@ export async function POST(request: NextRequest) {
 
   await (admin.from('stock_movements') as any).insert(movementRows)
 
-  // Mark all sales rows in this batch as exploded
   await (admin.from('daily_sales') as any)
     .update({ exploded_at: new Date().toISOString() })
     .eq('brand_id', brand_id)

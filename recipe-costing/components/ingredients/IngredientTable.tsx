@@ -1,16 +1,17 @@
-'use client'
+﻿'use client'
 
-import type { Ingredient } from '@/types'
+import type { Ingredient, UnitConversion } from '@/types'
 
 interface Props {
   ingredients: Ingredient[]
+  conversions: Map<string, UnitConversion>
   canEdit: boolean
   canSeePrices: boolean
   onEdit: (i: Ingredient) => void
   onDelete: (i: Ingredient) => void
 }
 
-export default function IngredientTable({ ingredients, canEdit, canSeePrices, onEdit, onDelete }: Props) {
+export default function IngredientTable({ ingredients, conversions, canEdit, canSeePrices, onEdit, onDelete }: Props) {
   const groups = ingredients.reduce<Record<string, Ingredient[]>>((acc, i) => {
     if (!acc[i.category]) acc[i.category] = []
     acc[i.category].push(i)
@@ -29,12 +30,13 @@ export default function IngredientTable({ ingredients, canEdit, canSeePrices, on
             {category} ({items.length})
           </h3>
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-            <table className="w-full text-sm">
+            <table suppressHydrationWarning className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200 text-gray-500 text-xs bg-gray-50">
                   <th className="text-right px-4 py-3 font-medium">الاسم</th>
                   <th className="text-right px-4 py-3 font-medium">SKU</th>
-                  <th className="text-center px-4 py-3 font-medium">الوحدة</th>
+                  <th className="text-center px-4 py-3 font-medium">وحدة الوصفة</th>
+                  <th className="text-center px-4 py-3 font-medium">وحدة الشراء</th>
                   {canSeePrices && (
                     <th className="text-center px-4 py-3 font-medium">التكلفة / وحدة</th>
                   )}
@@ -47,6 +49,18 @@ export default function IngredientTable({ ingredients, canEdit, canSeePrices, on
                     <td className="px-4 py-3 text-gray-900">{i.name}</td>
                     <td className="px-4 py-3 text-gray-400 font-mono text-xs">{i.sku}</td>
                     <td className="px-4 py-3 text-center text-gray-500">{i.unit}</td>
+                    <td className="px-4 py-3 text-center">
+                      {conversions.has(i.sku) ? (
+                        <span className="inline-flex items-center gap-1 text-sm text-gray-700">
+                          {conversions.get(i.sku)!.buy_unit}
+                          <span className="text-xs text-gray-400 font-mono">
+                            ×{conversions.get(i.sku)!.factor}
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
                     {canSeePrices && (
                       <td className="px-4 py-3 text-center font-mono">
                         {i.cost > 0 ? (
