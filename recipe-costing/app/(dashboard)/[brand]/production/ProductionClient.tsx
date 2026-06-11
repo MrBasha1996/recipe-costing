@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, useRef } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import type { BrandId } from '@/types'
@@ -584,8 +584,8 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
                   </thead>
                   <tbody>
                     {sessions.map((s, i) => (
-                      <>
-                        <tr key={s.id} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                      <React.Fragment key={s.id}>
+                        <tr className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
                           <td className="px-4 py-3">
                             <div className="font-medium text-gray-900">{s.batch_name}</div>
                             <div className="text-xs text-gray-400 font-mono">{s.batch_sku}</div>
@@ -676,7 +676,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
                         </tr>
                         {/* تحذيرات المخزون */}
                         {s.warnings?.length > 0 && (
-                          <tr key={s.id + '_warn'} className="bg-amber-50/50">
+                          <tr className="bg-amber-50/50">
                             <td colSpan={canE ? 7 : 6} className="px-4 py-2">
                               <div className="text-xs text-amber-700 flex flex-wrap gap-2">
                                 <span className="font-medium">⚠ تحذيرات:</span>
@@ -687,7 +687,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
                             </td>
                           </tr>
                         )}
-                      </>
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>

@@ -1,5 +1,5 @@
-export type BrandId = 'ti' | 'bb'
-export type BrandAccess = 'ti' | 'bb' | 'all'
+export type BrandId = string
+export type BrandAccess = string
 export type ProductCategory = 'Meal'
 export type ItemType = 'ingredient' | 'product'
 
@@ -7,6 +7,8 @@ export interface Brand {
   id: BrandId
   name: string
   name_ar: string
+  fc_target_low?: number
+  fc_target_high?: number
 }
 
 export interface UserProfile {
@@ -16,6 +18,12 @@ export interface UserProfile {
   brand_access: BrandAccess
   role_id?: string | null
   created_at: string
+}
+
+export interface UserBranchAccess {
+  id: string
+  user_id: string
+  branch_id: string
 }
 
 export interface Product {
@@ -204,6 +212,7 @@ export interface DailySale {
   product_name: string
   qty_sold: number
   revenue: number
+  cost: number | null
   import_batch: string
   imported_by: string | null
   created_at: string

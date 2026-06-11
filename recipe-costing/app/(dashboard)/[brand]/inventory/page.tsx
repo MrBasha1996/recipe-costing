@@ -22,7 +22,7 @@ export default async function InventoryPage({ params }: { params: Promise<{ bran
 
   const [{ data: ings }, { data: batches }, { data: stockRows }, { data: moves }] = await Promise.all([
     (supabase.from('ingredients') as any).select('sku, name, unit').eq('brand_id', brand),
-    (supabase.from('products') as any).select('sku, name, unit').eq('brand_id', brand).or('is_semi.eq.true,category.eq.Batch'),
+    (supabase.from('batches') as any).select('sku, name, unit').eq('brand_id', brand),
     (supabase.from('stock_items') as any).select('id, ing_sku, current_qty, min_qty, expiry_date, batch_number').eq('brand_id', brand),
     (supabase.from('stock_movements') as any).select('*').eq('brand_id', brand).order('created_at', { ascending: false }).limit(200),
   ])

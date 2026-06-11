@@ -51,10 +51,11 @@ export async function POST(request: NextRequest) {
       .eq('brand_id', brand_id)
       .eq('sku', batch_sku)
       .eq('is_active', true)
-      .single()
+      .eq('is_approved', true)
+      .maybeSingle()
 
     if (recipeErr || !recipeRow) {
-      return NextResponse.json({ error: 'لا توجد وصفة نشطة لهذا الباتش' }, { status: 404 })
+      return NextResponse.json({ error: 'لا توجد وصفة معتمدة نشطة لهذا الباتش' }, { status: 404 })
     }
 
     const recipe = recipeRow as any

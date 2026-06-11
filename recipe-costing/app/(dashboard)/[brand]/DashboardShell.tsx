@@ -27,6 +27,8 @@ const NAV_BASE = [
   { key: 'suppliers',   icon: '🏭', label: 'الموردون',      path: '/suppliers' },
   { key: 'users',       icon: '👥', label: 'المستخدمون',    path: '/users' },
   { key: 'roles',       icon: '🔐', label: 'المجموعات',     path: '/roles' },
+  { key: 'brands',      icon: '🏢', label: 'البراندات',     path: '/brands' },
+  { key: 'branches',    icon: '🏪', label: 'الفروع',        path: '/branches' },
   { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     path: '/settings' },
 ]
 

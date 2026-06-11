@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { createClient } from '@/lib/supabase/client'
 import type { BrandId } from '@/types'
 
 const VEG_URL = process.env.NEXT_PUBLIC_VEG_APP_URL ?? 'http://localhost:5173'
@@ -13,13 +14,21 @@ interface Props {
   canClose: boolean
 }
 
-const BRANDS = [
-  {
-    id: 'ti' as BrandId,
-    name: 'Three In',
-    nameAr: 'ثري إن',
-    tagline: 'Burger & Steak',
-    taglineAr: 'برجر وستيك',
+interface BrandStyle {
+  icon: string
+  bg: string
+  cardBorder: string
+  cardGlow: string
+  accentBar: string
+  badgeBg: string
+  badgeText: string
+  btnBg: string
+  btnShadow: string
+}
+
+// Visual styles per known brand ID — new brands get DEFAULT_STYLE
+const BRAND_STYLES: Record<string, BrandStyle> = {
+  ti: {
     icon: '🍔',
     bg: 'linear-gradient(145deg, #0a1628 0%, #0e2040 40%, #1a3a6a 100%)',
     cardBorder: 'rgba(59,130,246,0.35)',
@@ -29,18 +38,8 @@ const BRANDS = [
     badgeText: '#93c5fd',
     btnBg: 'linear-gradient(135deg, #1d4ed8, #3b82f6)',
     btnShadow: 'rgba(59,130,246,0.4)',
-    stats: [
-      { label: 'وجبات رئيسية', value: 'Meal' },
-      { label: 'منتجات وسيطة', value: 'Batch' },
-      { label: 'برجر وستيك', value: '' },
-    ],
   },
-  {
-    id: 'bb' as BrandId,
-    name: 'باب البلد',
-    nameAr: 'Bab Al Balad',
-    tagline: 'المطبخ العربي الأصيل',
-    taglineAr: 'Traditional Arabic Kitchen',
+  bb: {
     icon: '🫕',
     bg: 'linear-gradient(145deg, #120500 0%, #1c0a00 40%, #3d1a00 100%)',
     cardBorder: 'rgba(217,119,6,0.35)',
@@ -50,18 +49,32 @@ const BRANDS = [
     badgeText: '#fcd34d',
     btnBg: 'linear-gradient(135deg, #b45309, #d97706)',
     btnShadow: 'rgba(217,119,6,0.4)',
-    stats: [
-      { label: 'مطبق وفطيرة', value: '' },
-      { label: 'فول وبيض', value: '' },
-      { label: 'مشويات يمنية', value: '' },
-    ],
   },
-]
+}
+
+const DEFAULT_STYLE: BrandStyle = {
+  icon: '🏪',
+  bg: 'linear-gradient(145deg, #0f172a 0%, #1e293b 40%, #334155 100%)',
+  cardBorder: 'rgba(148,163,184,0.35)',
+  cardGlow: 'rgba(148,163,184,0.12)',
+  accentBar: 'linear-gradient(to right, #475569, #94a3b8, #cbd5e1)',
+  badgeBg: 'rgba(148,163,184,0.2)',
+  badgeText: '#cbd5e1',
+  btnBg: 'linear-gradient(135deg, #475569, #64748b)',
+  btnShadow: 'rgba(148,163,184,0.4)',
+}
 
 export default function BrandSelectorOverlay({ visible, currentBrand, onPick, onClose, canClose }: Props) {
   const [show, setShow] = useState(false)
   const [leaving, setLeaving] = useState(false)
-  const [hoveredId, setHoveredId] = useState<BrandId | 'veg' | null>(null)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  const [brands, setBrands] = useState<{ id: string; name: string; name_ar: string }[]>([])
+
+  useEffect(() => {
+    const supabase = createClient()
+    ;(supabase.from('brands') as any).select('id, name, name_ar').order('id')
+      .then(({ data }: any) => { if (data) setBrands(data) })
+  }, [])
 
   useEffect(() => {
     if (visible) {
@@ -76,9 +89,7 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
 
   function handlePick(brand: BrandId) {
     setLeaving(true)
-    setTimeout(() => {
-      onPick(brand)
-    }, 400)
+    setTimeout(() => { onPick(brand) }, 400)
   }
 
   function handleClose() {
@@ -105,7 +116,6 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
         transition: 'opacity 0.4s ease',
       }}
     >
-      {/* Slide panel */}
       <div
         style={{
           width: '100%',
@@ -129,13 +139,12 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
         </div>
 
         {/* Brand Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: brands.length === 1 ? '1fr' : '1fr 1fr', gap: 20 }}>
 
-          {/* ── Restaurant brands ── */}
-          {BRANDS.map((brand, idx) => {
+          {brands.map((brand, idx) => {
+            const style = BRAND_STYLES[brand.id] ?? DEFAULT_STYLE
             const isActive  = currentBrand === brand.id
             const isHovered = hoveredId === brand.id
-            const scale     = isHovered ? 1.025 : 1
 
             return (
               <div
@@ -144,15 +153,15 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
                 onMouseEnter={() => setHoveredId(brand.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 style={{
-                  background: brand.bg,
-                  border: `1px solid ${isActive || isHovered ? brand.cardBorder : 'rgba(255,255,255,0.08)'}`,
+                  background: style.bg,
+                  border: `1px solid ${isActive || isHovered ? style.cardBorder : 'rgba(255,255,255,0.08)'}`,
                   borderRadius: 20,
                   padding: '32px 28px',
                   cursor: 'pointer',
-                  transform: `scale(${scale})`,
+                  transform: `scale(${isHovered ? 1.025 : 1})`,
                   transition: 'transform 0.25s cubic-bezier(0.34,1.56,0.64,1), border-color 0.2s, box-shadow 0.25s',
                   boxShadow: isActive || isHovered
-                    ? `0 20px 60px ${brand.cardGlow}, 0 0 0 1px ${brand.cardBorder}`
+                    ? `0 20px 60px ${style.cardGlow}, 0 0 0 1px ${style.cardBorder}`
                     : '0 4px 20px rgba(0,0,0,0.3)',
                   position: 'relative',
                   overflow: 'hidden',
@@ -163,37 +172,34 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
                   <div style={{
                     position: 'absolute', top: 16, left: 16,
                     fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                    background: brand.badgeBg, color: brand.badgeText,
+                    background: style.badgeBg, color: style.badgeText,
                     padding: '4px 12px', borderRadius: 20,
-                    border: `1px solid ${brand.cardBorder}`,
+                    border: `1px solid ${style.cardBorder}`,
                   }}>
                     ● الحالي
                   </div>
                 )}
-                <div style={{ height: 3, background: brand.accentBar, borderRadius: 4, marginBottom: 24 }} />
+                <div style={{ height: 3, background: style.accentBar, borderRadius: 4, marginBottom: 24 }} />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
                   <div style={{
                     width: 64, height: 64, borderRadius: 16,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                     fontSize: 32, background: 'rgba(255,255,255,0.08)',
-                    border: `1px solid ${brand.cardBorder}`, flexShrink: 0,
+                    border: `1px solid ${style.cardBorder}`, flexShrink: 0,
                   }}>
-                    {brand.icon}
+                    {style.icon}
                   </div>
                   <div>
-                    <div style={{ fontSize: 22, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{brand.name}</div>
-                    <div style={{ fontSize: 13, color: brand.badgeText, marginTop: 2 }}>{brand.nameAr}</div>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{brand.name_ar}</div>
+                    <div style={{ fontSize: 13, color: style.badgeText, marginTop: 2 }}>{brand.name}</div>
                   </div>
                 </div>
-                <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.55)', marginBottom: 8, lineHeight: 1.5 }}>{brand.tagline}</div>
-                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', marginBottom: 24 }}>{brand.taglineAr}</div>
-                <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', marginBottom: 20 }} />
                 <button style={{
                   width: '100%', padding: '12px 0', borderRadius: 12, border: 'none',
-                  background: isActive ? brand.btnBg : 'rgba(255,255,255,0.08)',
+                  background: isActive ? style.btnBg : 'rgba(255,255,255,0.08)',
                   color: isActive ? '#fff' : 'rgba(255,255,255,0.6)',
                   fontSize: 14, fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s',
-                  boxShadow: isActive ? `0 8px 24px ${brand.btnShadow}` : 'none',
+                  boxShadow: isActive ? `0 8px 24px ${style.btnShadow}` : 'none',
                   letterSpacing: '0.03em',
                 }}>
                   {isActive ? '✓ متصل الآن' : 'دخول →'}
@@ -230,14 +236,11 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
                   gap: 28,
                 }}
               >
-                {/* Top accent bar */}
                 <div style={{
                   position: 'absolute', top: 0, left: 0, right: 0, height: 3,
                   background: 'linear-gradient(to right, #14532d, #22c55e, #86efac)',
                   borderRadius: '20px 20px 0 0',
                 }} />
-
-                {/* External badge */}
                 <div style={{
                   position: 'absolute', top: 16, left: 16,
                   fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
@@ -247,19 +250,14 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
                 }}>
                   ↗ نظام مستقل
                 </div>
-
-                {/* Icon */}
                 <div style={{
                   width: 72, height: 72, borderRadius: 18, flexShrink: 0,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 36,
-                  background: 'rgba(34,197,94,0.1)',
+                  fontSize: 36, background: 'rgba(34,197,94,0.1)',
                   border: '1px solid rgba(34,197,94,0.3)',
                 }}>
                   🥬
                 </div>
-
-                {/* Info */}
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>GreenBasket</div>
                   <div style={{ fontSize: 13, color: '#86efac', marginTop: 2 }}>نظام الخضار والفاكهة</div>
@@ -267,8 +265,6 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
                     خضار · فاكهة · أعشاب — مبيعات بالكجم، عملاء B2B، تكلفة شهرية
                   </div>
                 </div>
-
-                {/* CTA */}
                 <button style={{
                   padding: '12px 28px', borderRadius: 12, border: 'none', flexShrink: 0,
                   background: isHovered ? 'linear-gradient(135deg, #15803d, #22c55e)' : 'rgba(34,197,94,0.12)',
@@ -285,24 +281,20 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
 
         </div>
 
-        {/* Close / Cancel */}
         {canClose && (
           <div style={{ textAlign: 'center', marginTop: 24 }}>
             <button
               onClick={handleClose}
               style={{
-                background: 'none',
-                border: 'none',
+                background: 'none', border: 'none',
                 color: 'rgba(255,255,255,0.3)',
-                fontSize: 13,
-                cursor: 'pointer',
-                padding: '8px 16px',
+                fontSize: 13, cursor: 'pointer', padding: '8px 16px',
                 transition: 'color 0.2s',
               }}
               onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
               onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.3)')}
             >
-              إغلاق ← الاستمرار مع {BRANDS.find(b => b.id === currentBrand)?.name}
+              إغلاق ← الاستمرار مع {brands.find(b => b.id === currentBrand)?.name_ar ?? currentBrand}
             </button>
           </div>
         )}

@@ -513,13 +513,16 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
       .insert({ brand_id: brand, session_date: newDate, notes: newNotes || null, created_by: user?.id })
       .select().single()
     if (error) { setSaving(false); return }
-    const [{ data: ings }, { data: batches }] = await Promise.all([
+    const [{ data: ings }, { data: batchRecipes }] = await Promise.all([
       (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
-      (supabase.from('products') as any).select('sku, price').eq('brand_id', brand).or('is_semi.eq.true,category.eq.Batch'),
+      (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true),
     ])
     const costMap = new Map<string, number>()
     for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost ?? 0)
-    for (const b of (batches || []) as any[]) costMap.set(b.sku, b.price ?? 0)
+    for (const r of (batchRecipes || []) as any[]) {
+      const yp = Math.max(r.yield_portions ?? 1, 1)
+      costMap.set(r.sku, (r.total_cost ?? 0) / yp)
+    }
     const rows = items.map(i => ({
       session_id: session.id, ing_sku: i.sku, ing_name: i.name, unit: i.unit,
       item_type: i.type, theoretical_qty: i.current_qty, actual_qty: i.current_qty,
@@ -547,6 +550,8 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     if (!activeSession || !confirm('إنهاء الجرد وتحديث المخزون بالكميات الفعلية؟')) return
     setSaving(true)
     const supabase = createClient()
+    const user = (await supabase.auth.getUser()).data.user
+    const minQtyMap = new Map(items.map(i => [i.sku, i.min_qty]))
     for (const item of sessionItems) {
       await (supabase.from('stocktake_items') as any).update({ actual_qty: item.actual_qty }).eq('id', item.id)
     }
@@ -556,11 +561,12 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
       if (Math.abs(variance) < 0.001) continue
       await (supabase.from('stock_items') as any).upsert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        unit: item.unit, current_qty: item.actual_qty, min_qty: 0, updated_at: new Date().toISOString(),
+        unit: item.unit, current_qty: item.actual_qty, min_qty: minQtyMap.get(item.ing_sku) ?? 0,
+        updated_at: new Date().toISOString(),
       }, { onConflict: 'brand_id,ing_sku' })
       await (supabase.from('stock_movements') as any).insert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        movement_type: 'adjustment', qty: Math.abs(variance), note, performed_by: null,
+        movement_type: 'adjustment', qty: Math.abs(variance), note, performed_by: user?.id ?? null,
       })
     }
     await (supabase.from('stocktake_sessions') as any)
@@ -745,7 +751,7 @@ function AvailabilityTab({ brand }: { brand: BrandId }) {
       setLoading(true)
       const supabase = createClient()
       const [{ data: recipes }, { data: ings }, { data: stockRows }] = await Promise.all([
-        (supabase.from('recipes') as any).select('id, sku, product_name, yield_portions').eq('brand_id', brand).eq('is_active', true).eq('is_semi', false),
+        (supabase.from('recipes') as any).select('id, sku, product_name, yield_portions').eq('brand_id', brand).eq('is_active', true).eq('is_approved', true).eq('is_semi', false),
         (supabase.from('recipe_ingredients') as any).select('recipe_id, ing_sku, ing_name, qty, yield_pct'),
         (supabase.from('stock_items') as any).select('ing_sku, current_qty').eq('brand_id', brand),
       ])
@@ -845,17 +851,20 @@ function AgingTab({ brand }: { brand: BrandId }) {
     const load = async () => {
       setLoading(true)
       const supabase = createClient()
-      const [{ data: stocks }, { data: moves }, { data: ings }, { data: prods }] = await Promise.all([
+      const [{ data: stocks }, { data: moves }, { data: ings }, { data: batchRecipes }] = await Promise.all([
         (supabase.from('stock_items') as any).select('ing_sku, ing_name, current_qty, min_qty, updated_at').eq('brand_id', brand).gt('current_qty', 0),
         (supabase.from('stock_movements') as any).select('ing_sku, created_at').eq('brand_id', brand).in('movement_type', ['out', 'waste']).order('created_at', { ascending: false }).limit(2000),
         (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
-        (supabase.from('products') as any).select('sku, price').eq('brand_id', brand).or('is_semi.eq.true,category.eq.Batch'),
+        (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true),
       ])
       const lastMoveMap = new Map<string, string>()
       for (const m of (moves || []) as any[]) { if (!lastMoveMap.has(m.ing_sku)) lastMoveMap.set(m.ing_sku, m.created_at) }
       const costMap = new Map<string, number>()
       for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost ?? 0)
-      for (const p of (prods || []) as any[]) costMap.set(p.sku, p.price ?? 0)
+      for (const r of (batchRecipes || []) as any[]) {
+        const yp = Math.max(r.yield_portions ?? 1, 1)
+        costMap.set(r.sku, (r.total_cost ?? 0) / yp)
+      }
       const todayMs = Date.now()
       const result = ((stocks || []) as any[]).map((s: any) => {
         const lastMove  = lastMoveMap.get(s.ing_sku)

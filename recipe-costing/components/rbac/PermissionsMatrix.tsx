@@ -1,5 +1,6 @@
 'use client'
 
+import React from 'react'
 import type { Module, RolePermission, PermissionAction } from '@/types'
 
 // ── Permission row state ───────────────────────────────────────────
@@ -153,15 +154,29 @@ export default function PermissionsMatrix({
           {modules.filter(m => m.is_active).map((mod, i) => {
             const p = permState[mod.code] ?? EMPTY_PERM
             const hasPriceCol = PRICE_MODULES.has(mod.code)
+            const isFirstReportModule = mod.code === 'report_pl' ||
+              (mod.code.startsWith('report_') &&
+                !modules.filter(m => m.is_active).slice(0, i).some(m => m.code.startsWith('report_')))
             return (
+              <React.Fragment key={mod.code}>
+                {isFirstReportModule && (
+                  <tr className="bg-blue-50/60 border-b border-blue-100">
+                    <td colSpan={STANDARD_ACTIONS.length + 2} className="px-4 py-2 text-xs font-semibold text-blue-700 tracking-wide">
+                      📊 تقارير التبويبات — كل صلاحية تتحكم في ظهور تبويب واحد
+                    </td>
+                  </tr>
+                )}
               <tr
-                key={mod.code}
                 className={`border-b border-gray-100 last:border-0 transition-colors ${
                   i % 2 === 0 ? 'bg-white' : 'bg-gray-50/40'
                 } ${!disabled ? 'hover:bg-blue-50/30' : ''}`}
               >
                 <td className="px-4 py-2.5 sticky right-0 bg-inherit z-10">
-                  <span className="text-gray-800 font-medium">{mod.name}</span>
+                  {mod.code.startsWith('report_') ? (
+                    <span className="text-gray-600 text-sm pr-3">↳ {mod.name}</span>
+                  ) : (
+                    <span className="text-gray-800 font-medium">{mod.name}</span>
+                  )}
                 </td>
 
                 {STANDARD_ACTIONS.map(a => {
@@ -208,6 +223,7 @@ export default function PermissionsMatrix({
                   )}
                 </td>
               </tr>
+              </React.Fragment>
             )
           })}
         </tbody>

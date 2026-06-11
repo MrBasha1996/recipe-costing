@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react'
 import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
 import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange } from '@/lib/period'
 import type { BrandId } from '@/types'
 import { VAT_RATE } from '@/lib/calculations'
@@ -16,6 +17,26 @@ import {
 } from 'recharts'
 
 type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl'
+
+const TAB_MODULE: Record<ReportTab, string> = {
+  'pl':          'report_pl',
+  'fc':          'report_fc',
+  'breakeven':   'report_breakeven',
+  'purchases':   'report_purchases',
+  'sales':       'report_sales',
+  'menu':        'report_menu',
+  'variance':    'report_variance',
+  'primecost':   'report_primecost',
+  'pricing':     'report_pricing',
+  'trends':      'report_trends',
+  'branches':    'report_branches',
+  'prices':      'report_prices',
+  'actual-fc':   'report_actual_fc',
+  'dine':        'report_dine',
+  'discounts':   'report_discounts',
+  'consumption': 'report_consumption',
+  'compare-pl':  'report_compare_pl',
+}
 
 interface Props {
   initialBranches: string[]
@@ -53,27 +74,50 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
   const [fcLow, setFcLow]   = useState(initialFcLow)
   const [fcHigh, setFcHigh] = useState(initialFcHigh)
 
+  const { hasPermission, isSuperAdmin, loaded: permsLoaded } = usePermissionsStore()
+
   const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
 
-  const tabs: { key: ReportTab; label: string }[] = [
-    { key: 'pl',        label: 'الأرباح والخسائر' },
-    { key: 'fc',        label: 'تحليل Food Cost' },
-    { key: 'breakeven', label: 'نقطة التعادل' },
-    { key: 'purchases', label: 'تحليل المشتريات' },
-    { key: 'sales',     label: 'تحليل المبيعات' },
-    { key: 'menu',      label: 'هندسة القائمة' },
-    { key: 'variance',  label: 'مقارنة FC%' },
-    { key: 'primecost', label: 'التكلفة الإجمالية' },
-    { key: 'pricing',   label: 'التسعير العكسي' },
-    { key: 'trends',    label: 'الاتجاهات' },
-    { key: 'branches',  label: 'مقارنة الفروع' },
-    { key: 'prices',    label: 'تاريخ الأسعار' },
-    { key: 'actual-fc', label: 'FC فعلي vs نظري' },
+  const ALL_TABS: { key: ReportTab; label: string }[] = [
+    { key: 'pl',          label: 'الأرباح والخسائر' },
+    { key: 'fc',          label: 'تحليل Food Cost' },
+    { key: 'breakeven',   label: 'نقطة التعادل' },
+    { key: 'purchases',   label: 'تحليل المشتريات' },
+    { key: 'sales',       label: 'تحليل المبيعات' },
+    { key: 'menu',        label: 'هندسة القائمة' },
+    { key: 'variance',    label: 'مقارنة FC%' },
+    { key: 'primecost',   label: 'التكلفة الإجمالية' },
+    { key: 'pricing',     label: 'التسعير العكسي' },
+    { key: 'trends',      label: 'الاتجاهات' },
+    { key: 'branches',    label: 'مقارنة الفروع' },
+    { key: 'prices',      label: 'تاريخ الأسعار' },
+    { key: 'actual-fc',   label: 'FC فعلي vs نظري' },
     { key: 'dine',        label: 'داخل vs توصيل' },
     { key: 'discounts',   label: 'الخصومات والمرتجعات' },
     { key: 'consumption', label: 'استهلاك المواد' },
-    { key: 'compare-pl', label: 'مقارنة الفترات' },
+    { key: 'compare-pl',  label: 'مقارنة الفترات' },
   ]
+
+  // فلترة التبويبات بحسب الصلاحيات — قبل تحميل الصلاحيات نعرض الكل
+  const tabs = !permsLoaded || isSuperAdmin
+    ? ALL_TABS
+    : ALL_TABS.filter(t => hasPermission(TAB_MODULE[t.key], 'view'))
+
+  // إذا التبويب الحالي أصبح مخفياً، انتقل للأول المتاح
+  useEffect(() => {
+    if (!permsLoaded || isSuperAdmin) return
+    if (tabs.length > 0 && !tabs.find(t => t.key === tab)) {
+      setTab(tabs[0].key)
+    }
+  }, [permsLoaded, isSuperAdmin, tabs, tab])
+
+  if (permsLoaded && !isSuperAdmin && tabs.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
+        لا توجد تقارير متاحة لهذا الدور
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-5 max-w-7xl">

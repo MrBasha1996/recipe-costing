@@ -1,7 +1,11 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-const VALID_BRANDS = ['ti', 'bb']
+// Valid brands are fetched from DB per-request (table is small, changes rarely)
+async function getValidBrands(supabase: any): Promise<string[]> {
+  const { data } = await supabase.from('brands').select('id')
+  return (data ?? []).map((b: any) => b.id as string)
+}
 
 // Map path segment → module code for RBAC check
 const PATH_TO_MODULE: Record<string, string> = {
@@ -21,6 +25,8 @@ const PATH_TO_MODULE: Record<string, string> = {
   'suppliers':   'ingredients',
   'users':       'users',
   'roles':       'roles',
+  'brands':      'brands',
+  'branches':    'branches',
   'settings':    'settings',
   'conversions': 'ingredients',
 }
@@ -62,8 +68,10 @@ export async function middleware(request: NextRequest) {
   const brandInUrl = segments[0]
   const pageSegment = segments[1] // e.g. 'costing', 'batches', etc.
 
-  // Skip non-brand routes (API, etc.)
-  if (!brandInUrl || !VALID_BRANDS.includes(brandInUrl)) return supabaseResponse
+  // Skip non-brand routes — validate against DB
+  if (!brandInUrl) return supabaseResponse
+  const validBrands = await getValidBrands(supabase)
+  if (!validBrands.includes(brandInUrl)) return supabaseResponse
 
   const { data: profile } = await (supabase.from('user_profiles') as any)
     .select('role_id, brand_access, roles(is_super_admin)')

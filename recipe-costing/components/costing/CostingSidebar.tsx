@@ -112,6 +112,7 @@ export default function CostingSidebar({ brand, selectedSku, onSelect, mode }: P
         .eq('brand_id', brand)
         .eq('is_semi', isSemi)
         .eq('is_active', true)
+        .eq('is_approved', true)
         .order('product_name')
 
       const rows = (data || []) as any[]
@@ -152,6 +153,7 @@ export default function CostingSidebar({ brand, selectedSku, onSelect, mode }: P
         .eq('brand_id', brand)
         .eq('is_semi', isSemi)
         .eq('is_active', true)
+        .eq('is_approved', true)
         .order('product_name')
 
       const recipeList = (data || []) as any[]

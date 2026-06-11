@@ -18,12 +18,13 @@ const BodySchema = z.object({
  * Body: { brand_id, import_batch, auto_produce_batches?, performed_by? }
  *
  * Algorithm:
- * 1. Fetch all sales for the batch, grouped by product_sku
- * 2. For each product, find its active recipe + ingredients
- * 3. Calculate gross quantity to deduct per ingredient
- * 4. Aggregate deductions across all products
- * 5. Upsert stock_items (reduce current_qty)
- * 6. Insert stock_movements for audit trail
+ * 1. Fetch all sales for the batch
+ * 2. For each product, find its active+approved recipe + ingredients
+ * 2b. For products without a recipe → check combo_meals (expand to component recipes)
+ * 3. Aggregate deductions across all products (regular + combo)
+ * 4. Upsert stock_items (reduce current_qty)
+ * 5. Insert stock_movements for audit trail
+ * 6. Write cost per sale record
  */
 export async function POST(request: NextRequest) {
   let body: unknown
@@ -42,9 +43,9 @@ export async function POST(request: NextRequest) {
   const { brand_id, import_batch, auto_produce_batches, performed_by } = parsed.data
   const admin = createAdminClient()
 
-  // ── 1. Fetch sales for this batch grouped by product_sku ──────────
+  // ── 1. Fetch sales for this batch ─────────────────────────────────
   const { data: sales, error: salesErr } = await (admin.from('daily_sales') as any)
-    .select('product_sku, product_name, qty_sold')
+    .select('id, product_sku, product_name, qty_sold')
     .eq('brand_id', brand_id)
     .eq('import_batch', import_batch)
 
@@ -58,42 +59,48 @@ export async function POST(request: NextRequest) {
 
   const productSkus = [...saleMap.keys()]
 
-  // ── 2. Fetch active recipes for all sold products ─────────────────
+  // ── 2. Fetch active + approved recipes for all sold products ───────
   const { data: recipes, error: recipeErr } = await (admin.from('recipes') as any)
-    .select('id, sku, yield_portions')
+    .select('id, sku, yield_portions, total_cost')
     .eq('brand_id', brand_id)
     .eq('is_active', true)
+    .eq('is_approved', true)
     .in('sku', productSkus)
 
   if (recipeErr) return NextResponse.json({ error: recipeErr.message }, { status: 500 })
 
-  const recipeMap = new Map<string, { id: string; yield_portions: number }>()
+  const recipeMap = new Map<string, { id: string; yield_portions: number; total_cost: number }>()
   for (const r of (recipes || []) as any[]) {
-    recipeMap.set(r.sku, { id: r.id, yield_portions: Math.max(r.yield_portions, 1) })
+    recipeMap.set(r.sku, {
+      id: r.id,
+      yield_portions: Math.max(r.yield_portions, 1),
+      total_cost: r.total_cost ?? 0,
+    })
   }
 
+  // ── 3. Fetch recipe ingredients ────────────────────────────────────
   const recipeIds = (recipes || []).map((r: any) => r.id)
-  if (!recipeIds.length) {
-    return NextResponse.json({ exploded: 0, skipped: productSkus.length, note: 'لا توجد وصفات نشطة لهذه المنتجات' })
-  }
 
-  // ── 3. Fetch all recipe ingredients ──────────────────────────────
-  const { data: ingredients, error: ingErr } = await (admin.from('recipe_ingredients') as any)
-    .select('recipe_id, ing_sku, ing_name, qty, yield_pct, is_semi')
-    .in('recipe_id', recipeIds)
+  const { data: ingredients, error: ingErr } = recipeIds.length > 0
+    ? await (admin.from('recipe_ingredients') as any)
+        .select('recipe_id, ing_sku, ing_name, qty, yield_pct, is_semi')
+        .in('recipe_id', recipeIds)
+    : { data: [], error: null }
 
   if (ingErr) return NextResponse.json({ error: ingErr.message }, { status: 500 })
 
-  // ── 3b. Fetch unit conversions (recipe_unit → buy_unit) ──────────
+  // ── 3b. Unit conversions ───────────────────────────────────────────
   const allIngSkus = [...new Set((ingredients || []).map((i: any) => i.ing_sku))]
-  const { data: ucRows } = await (admin.from('unit_conversions') as any)
-    .select('ing_sku, factor')
-    .eq('brand_id', brand_id)
-    .in('ing_sku', allIngSkus)
+  const { data: ucRows } = allIngSkus.length > 0
+    ? await (admin.from('unit_conversions') as any)
+        .select('ing_sku, factor')
+        .eq('brand_id', brand_id)
+        .in('ing_sku', allIngSkus)
+    : { data: [] }
   const ucMap = new Map<string, number>()
   for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
 
-  // ── 4. Aggregate deductions per ingredient ────────────────────────
+  // ── 4. Aggregate deductions — regular products ─────────────────────
   const deductMap = new Map<string, { name: string; qty: number }>()
   let exploded = 0
   let skipped = 0
@@ -113,10 +120,92 @@ export async function POST(request: NextRequest) {
       const totalDeduct = (grossPerPortion * qtySold) / factor
 
       const existing = deductMap.get(ing.ing_sku)
-      if (existing) {
-        existing.qty += totalDeduct
-      } else {
-        deductMap.set(ing.ing_sku, { name: ing.ing_name, qty: totalDeduct })
+      if (existing) existing.qty += totalDeduct
+      else deductMap.set(ing.ing_sku, { name: ing.ing_name, qty: totalDeduct })
+    }
+  }
+
+  // ── 4b. Combo meal expansion ───────────────────────────────────────
+  // لكل SKU لم تُوجد له وصفة → نفحص إذا كان وجبة كومبو نشطة.
+  // نوسّع الكومبو إلى وصفات عناصره، ونجمع خصومات المواد الخام.
+  const comboMap = new Map<string, { total_cost: number }>()
+
+  const missingSkus = productSkus.filter(sku => !recipeMap.has(sku))
+  if (missingSkus.length > 0) {
+    const { data: combos } = await (admin.from('combo_meals') as any)
+      .select('sku, total_cost, combo_meal_items(product_sku, qty)')
+      .eq('brand_id', brand_id)
+      .eq('is_active', true)
+      .in('sku', missingSkus)
+
+    if ((combos as any[])?.length) {
+      // جلب وصفات عناصر الكومبو (معتمدة + نشطة)
+      const compSkus = [...new Set((combos as any[]).flatMap((c: any) =>
+        (c.combo_meal_items || []).map((i: any) => i.product_sku)
+      ))]
+
+      const { data: compRecipes } = await (admin.from('recipes') as any)
+        .select('id, sku, yield_portions')
+        .eq('brand_id', brand_id)
+        .eq('is_active', true)
+        .eq('is_approved', true)
+        .in('sku', compSkus)
+
+      const compRecipeMap = new Map<string, { id: string; yield_portions: number }>()
+      for (const r of (compRecipes || []) as any[])
+        compRecipeMap.set(r.sku, { id: r.id, yield_portions: Math.max(r.yield_portions, 1) })
+
+      const compRecipeIds = [...compRecipeMap.values()].map(r => r.id)
+
+      if (compRecipeIds.length > 0) {
+        const { data: compIngs } = await (admin.from('recipe_ingredients') as any)
+          .select('recipe_id, ing_sku, ing_name, qty, yield_pct')
+          .in('recipe_id', compRecipeIds)
+
+        // توسيع ucMap بأي مكونات جديدة من الكومبو
+        const newIngSkus = [...new Set((compIngs || []).map((i: any) => i.ing_sku))]
+          .filter(s => !ucMap.has(s))
+        if (newIngSkus.length > 0) {
+          const { data: newUcRows } = await (admin.from('unit_conversions') as any)
+            .select('ing_sku, factor')
+            .eq('brand_id', brand_id)
+            .in('ing_sku', newIngSkus)
+          for (const uc of (newUcRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
+        }
+
+        const compIngsByRecipeId = new Map<string, any[]>()
+        for (const ing of (compIngs || []) as any[]) {
+          if (!compIngsByRecipeId.has(ing.recipe_id)) compIngsByRecipeId.set(ing.recipe_id, [])
+          compIngsByRecipeId.get(ing.recipe_id)!.push(ing)
+        }
+
+        for (const combo of (combos as any[])) {
+          const qtySold = saleMap.get(combo.sku) ?? 0
+          if (!qtySold) continue
+
+          let comboHasIngs = false
+          for (const item of (combo.combo_meal_items || []) as any[]) {
+            const compRecipe = compRecipeMap.get(item.product_sku)
+            if (!compRecipe) continue
+
+            const ings = compIngsByRecipeId.get(compRecipe.id) ?? []
+            for (const ing of ings) {
+              if ((ing.yield_pct ?? 0) <= 0) continue
+              comboHasIngs = true
+              const factor = ucMap.get(ing.ing_sku) ?? 1
+              const needed = ((ing.qty / (ing.yield_pct / 100)) / compRecipe.yield_portions * (item.qty ?? 1) * qtySold) / factor
+              const existing = deductMap.get(ing.ing_sku)
+              if (existing) existing.qty += needed
+              else deductMap.set(ing.ing_sku, { name: ing.ing_name, qty: needed })
+            }
+          }
+
+          if (comboHasIngs) {
+            comboMap.set(combo.sku, { total_cost: combo.total_cost ?? 0 })
+            exploded++
+            skipped--
+          }
+        }
       }
     }
   }
@@ -129,14 +218,12 @@ export async function POST(request: NextRequest) {
   const produced_batches: { sku: string; name: string; qty: number }[] = []
 
   if (auto_produce_batches) {
-    // تجميع احتياجات الباتشات من deductMap (is_semi=true)
     const batchIngSkus = new Set<string>()
     for (const ing of (ingredients || []) as any[]) {
       if (ing.is_semi) batchIngSkus.add(ing.ing_sku)
     }
 
     if (batchIngSkus.size > 0) {
-      // جلب المخزون الحالي للباتشات
       const { data: batchStocks } = await (admin.from('stock_items') as any)
         .select('ing_sku, current_qty')
         .eq('brand_id', brand_id)
@@ -145,7 +232,6 @@ export async function POST(request: NextRequest) {
       const batchStockMap = new Map<string, number>()
       for (const s of (batchStocks || []) as any[]) batchStockMap.set(s.ing_sku, s.current_qty)
 
-      // أنتج كل باتش ناقص
       for (const [bSku, info] of deductMap) {
         if (!batchIngSkus.has(bSku)) continue
         const inStock = batchStockMap.get(bSku) ?? 0
@@ -221,6 +307,24 @@ export async function POST(request: NextRequest) {
     .update({ exploded_at: new Date().toISOString() })
     .eq('brand_id', brand_id)
     .eq('import_batch', import_batch)
+
+  // ── 8. حساب وحفظ التكلفة لكل سجل مبيعات ─────────────────────────
+  // المنتجات العادية: cost = (total_cost / yield_portions) * qty_sold
+  // الكومبو:         cost = combo.total_cost * qty_sold
+  // سجلات بلا وصفة معتمدة أو كومبو → cost يبقى NULL
+  for (const row of (sales as any[])) {
+    const recipe = recipeMap.get(row.product_sku)
+    if (recipe) {
+      const cost = Math.round((recipe.total_cost / recipe.yield_portions) * row.qty_sold * 10000) / 10000
+      await (admin.from('daily_sales') as any).update({ cost }).eq('id', row.id)
+      continue
+    }
+    const combo = comboMap.get(row.product_sku)
+    if (combo) {
+      const cost = Math.round(combo.total_cost * row.qty_sold * 10000) / 10000
+      await (admin.from('daily_sales') as any).update({ cost }).eq('id', row.id)
+    }
+  }
 
   return NextResponse.json({
     ok: true,

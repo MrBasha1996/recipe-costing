@@ -5,18 +5,14 @@ import { createClient } from '@/lib/supabase/client'
 import type { UserProfile, BrandAccess } from '@/types'
 
 interface RoleOption { id: string; name: string; is_super_admin: boolean }
+interface BrandOption { id: string; name: string; name_ar: string }
+interface BranchOption { id: string; brand_id: string; name: string }
 
 interface Props {
   user: UserProfile | null
   onClose: () => void
   onSaved: () => void
 }
-
-const BRANDS: { value: BrandAccess; label: string }[] = [
-  { value: 'all', label: 'كل العلامات (TI + BB)' },
-  { value: 'ti',  label: 'Three In فقط' },
-  { value: 'bb',  label: 'باب البلد فقط' },
-]
 
 export default function UserForm({ user, onClose, onSaved }: Props) {
   const isEdit = !!user
@@ -25,20 +21,67 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
   const [username, setUsername]       = useState(user?.username ?? '')
   const [email, setEmail]             = useState('')
   const [password, setPassword]       = useState('')
-  const [brandAccess, setBrandAccess] = useState<BrandAccess>(user?.brand_access ?? 'ti')
+  const [brandAccess, setBrandAccess] = useState<BrandAccess>(user?.brand_access ?? 'all')
   const [rbacRoleId, setRbacRoleId]   = useState<string>(user?.role_id ?? '')
   const [rbacRoles, setRbacRoles]     = useState<RoleOption[]>([])
+  const [brands, setBrands]           = useState<BrandOption[]>([])
+  const [branches, setBranches]       = useState<BranchOption[]>([])
+  const [selectedBranchIds, setSelectedBranchIds] = useState<Set<string>>(new Set())
   const [saving, setSaving]           = useState(false)
   const [error, setError]             = useState<string | null>(null)
 
+  // تحميل الأدوار والبراندات والفروع
   useEffect(() => {
     const supabase = createClient()
+
     ;(supabase.from('roles') as any)
       .select('id, name, is_super_admin')
       .order('is_super_admin', { ascending: false })
       .order('name')
       .then(({ data }: any) => setRbacRoles(data || []))
-  }, [])
+
+    ;(supabase.from('brands') as any)
+      .select('id, name, name_ar')
+      .order('id')
+      .then(({ data }: any) => {
+        const brandList: BrandOption[] = data || []
+        setBrands(brandList)
+        // تحميل الفروع لكل البراندات
+        if (brandList.length > 0) {
+          const ids = brandList.map((b: BrandOption) => b.id)
+          ;(supabase.from('branches') as any)
+            .select('id, brand_id, name')
+            .in('brand_id', ids)
+            .eq('is_active', true)
+            .order('name')
+            .then(({ data: bData }: any) => setBranches(bData || []))
+        }
+      })
+
+    // تحميل صلاحيات الفروع الحالية (للتعديل فقط)
+    if (isEdit && user?.id) {
+      ;(supabase.from('user_branch_access') as any)
+        .select('branch_id')
+        .eq('user_id', user.id)
+        .then(({ data }: any) => {
+          setSelectedBranchIds(new Set((data || []).map((r: any) => r.branch_id)))
+        })
+    }
+  }, [isEdit, user?.id])
+
+  // الفروع المرئية بحسب اختيار البراند
+  const visibleBranches = brandAccess === 'all'
+    ? branches
+    : branches.filter(b => b.brand_id === brandAccess)
+
+  function toggleBranch(branchId: string) {
+    setSelectedBranchIds(prev => {
+      const next = new Set(prev)
+      if (next.has(branchId)) next.delete(branchId)
+      else next.add(branchId)
+      return next
+    })
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -52,6 +95,8 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
     setError(null)
 
     try {
+      let userId: string
+
       if (isEdit) {
         const res = await fetch(`/api/users/${user!.id}`, {
           method: 'PATCH',
@@ -63,6 +108,7 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
           }),
         })
         if (!res.ok) throw new Error((await res.json()).error)
+        userId = user!.id
       } else {
         const res = await fetch('/api/users', {
           method: 'POST',
@@ -75,7 +121,25 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
           }),
         })
         if (!res.ok) throw new Error((await res.json()).error)
+        const data = await res.json()
+        userId = data.id
       }
+
+      // حفظ صلاحيات الفروع
+      if (userId && branches.length > 0) {
+        const supabase = createClient()
+        // احذف الصلاحيات القديمة
+        await (supabase.from('user_branch_access') as any)
+          .delete()
+          .eq('user_id', userId)
+
+        // أضف الصلاحيات الجديدة (فقط إن كانت هناك تقييدات)
+        if (selectedBranchIds.size > 0 && selectedBranchIds.size < visibleBranches.length) {
+          const rows = [...selectedBranchIds].map(branch_id => ({ user_id: userId, branch_id }))
+          await (supabase.from('user_branch_access') as any).insert(rows)
+        }
+      }
+
       onSaved()
     } catch (err: any) {
       setError(err.message)
@@ -84,10 +148,19 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
     }
   }
 
+  // براند labels ديناميكية
+  const BRAND_OPTIONS = [
+    { value: 'all', label: `كل العلامات (${brands.map(b => b.name_ar).join(' + ')})` },
+    ...brands.map(b => ({ value: b.id, label: `${b.name_ar} فقط` })),
+  ]
+
+  const allVisibleSelected = visibleBranches.length > 0 &&
+    visibleBranches.every(b => selectedBranchIds.has(b.id))
+
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md shadow-xl">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+      <div className="bg-white border border-gray-200 rounded-2xl w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between sticky top-0 bg-white z-10">
           <h2 className="text-base font-bold text-gray-900">
             {isEdit ? 'تعديل المستخدم' : 'إضافة مستخدم جديد'}
           </h2>
@@ -147,7 +220,7 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
             </>
           )}
 
-          {/* RBAC Role — required */}
+          {/* RBAC Role */}
           <Field label="المجموعة (الصلاحيات) *">
             {rbacRoles.length === 0 ? (
               <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -170,17 +243,20 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
             )}
           </Field>
 
-          {/* Brand access */}
+          {/* Brand access — ديناميكي */}
           <Field label="الوصول للعلامات التجارية">
             <div className="space-y-2">
-              {BRANDS.map(b => (
+              {BRAND_OPTIONS.map(b => (
                 <label key={b.value} className="flex items-center gap-3 cursor-pointer group">
                   <input
                     type="radio"
                     name="brand"
                     value={b.value}
                     checked={brandAccess === b.value}
-                    onChange={() => setBrandAccess(b.value)}
+                    onChange={() => {
+                      setBrandAccess(b.value)
+                      setSelectedBranchIds(new Set())
+                    }}
                     className="accent-blue-500"
                   />
                   <span className={`text-sm ${brandAccess === b.value ? 'text-gray-900 font-medium' : 'text-gray-500'} group-hover:text-gray-900 transition-colors`}>
@@ -190,6 +266,47 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
               ))}
             </div>
           </Field>
+
+          {/* Branch access */}
+          {visibleBranches.length > 0 && (
+            <Field label="تقييد الفروع (اختياري)">
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="px-3 py-2 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+                  <span className="text-xs text-gray-500">لا تحديد = الوصول لكل الفروع</span>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedBranchIds(
+                      allVisibleSelected ? new Set() : new Set(visibleBranches.map(b => b.id))
+                    )}
+                    className="text-xs text-blue-600 hover:text-blue-800"
+                  >
+                    {allVisibleSelected ? 'إلغاء الكل' : 'تحديد الكل'}
+                  </button>
+                </div>
+                <div className="max-h-40 overflow-y-auto">
+                  {visibleBranches.map(b => (
+                    <label key={b.id} className="flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 cursor-pointer border-b border-gray-100 last:border-0">
+                      <input
+                        type="checkbox"
+                        checked={selectedBranchIds.has(b.id)}
+                        onChange={() => toggleBranch(b.id)}
+                        className="w-4 h-4 accent-blue-600"
+                      />
+                      <span className="text-sm text-gray-700">{b.name}</span>
+                      {brandAccess === 'all' && (
+                        <span className="text-xs text-gray-400 mr-auto">{b.brand_id}</span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+                {selectedBranchIds.size > 0 && selectedBranchIds.size < visibleBranches.length && (
+                  <div className="px-3 py-1.5 bg-blue-50 text-xs text-blue-700">
+                    مقيّد بـ {selectedBranchIds.size} من {visibleBranches.length} فرع
+                  </div>
+                )}
+              </div>
+            </Field>
+          )}
 
           {error && (
             <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-red-600 text-sm">
