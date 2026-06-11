@@ -327,6 +327,37 @@ export interface ComponentItem {
   is_semi: boolean
 }
 
+// ── Combo Meals ───────────────────────────────────────────────────
+
+export interface ComboMealItem {
+  id: string
+  combo_id: string
+  brand_id: BrandId
+  product_sku: string
+  product_name: string
+  qty: number
+  unit_cost: number
+  total_cost: number
+  sort_order: number
+  created_at: string
+}
+
+export interface ComboMeal {
+  id: string
+  brand_id: BrandId
+  sku: string
+  name: string
+  price: number
+  app_price: number | null
+  total_cost: number
+  food_cost_pct: number
+  margin: number
+  margin_app: number | null
+  is_active: boolean
+  created_at: string
+  combo_meal_items?: ComboMealItem[]
+}
+
 // ── RBAC ─────────────────────────────────────────────────────────
 
 export interface RbacRole {

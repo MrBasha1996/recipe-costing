@@ -4,6 +4,13 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { requireBrandAccess, isAuthError } from '@/lib/auth'
 import { executeBatchProduce } from '@/lib/produceBatch'
 
+const ActualSchema = z.object({
+  ing_sku:  z.string(),
+  ing_name: z.string(),
+  unit:     z.string(),
+  qty:      z.number().nonnegative(),
+})
+
 const BodySchema = z.object({
   brand_id:     z.string().min(1),
   batch_sku:    z.string().min(1),
@@ -11,6 +18,7 @@ const BodySchema = z.object({
   dry_run:      z.boolean().optional().default(false),
   note:         z.string().optional(),
   performed_by: z.string().uuid().nullable().optional().default(null),
+  actuals:      z.array(ActualSchema).optional(),
 })
 
 /**
@@ -33,7 +41,7 @@ export async function POST(request: NextRequest) {
   const user = await requireBrandAccess(parsed.data.brand_id)
   if (isAuthError(user)) return user
 
-  const { brand_id, batch_sku, qty_portions, dry_run, note: userNote, performed_by } = parsed.data
+  const { brand_id, batch_sku, qty_portions, dry_run, note: userNote, performed_by, actuals } = parsed.data
   const admin = createAdminClient()
 
   // ── dry_run: حساب بدون كتابة ──────────────────────────────────────
@@ -118,6 +126,7 @@ export async function POST(request: NextRequest) {
     qty_portions,
     performed_by: performed_by ?? null,
     note: userNote,
+    actuals: actuals?.length ? actuals : undefined,
   })
 
   if ('error' in result) {

@@ -8,16 +8,22 @@ export type ProduceResult =
       batch_new_stock: number
       ingredients_deducted: number
       warnings: string[]
+      session_id: string
     }
   | { error: string; status: number }
 
+export interface ActualIngredient {
+  ing_sku: string
+  ing_name: string
+  unit: string
+  qty: number
+}
+
 /**
- * Core batch production logic — shared between:
- *   - POST /api/batches/produce  (user-triggered)
- *   - POST /api/sales/explode    (auto_produce mode)
+ * Core batch production logic.
  *
- * Does NOT perform authentication — callers are responsible for auth.
- * Uses the admin client so RLS is bypassed intentionally.
+ * إذا مُرِّر actuals → يستخدم الكميات الفعلية مباشرة بدون حساب من الوصفة.
+ * إذا لم يُمرَّر → يحسب الكميات من الوصفة النشطة (الوضع الافتراضي).
  */
 export async function executeBatchProduce(
   admin: SupabaseClient,
@@ -27,53 +33,76 @@ export async function executeBatchProduce(
     qty_portions: number
     performed_by: string | null
     note?: string
+    actuals?: ActualIngredient[]
   },
 ): Promise<ProduceResult> {
-  const { brand_id, batch_sku, qty_portions, performed_by, note: userNote } = params
+  const { brand_id, batch_sku, qty_portions, performed_by, note: userNote, actuals } = params
 
-  // ── 1. جلب الوصفة النشطة ──────────────────────────────────────────
-  const { data: recipeRow, error: recipeErr } = await (admin.from('recipes') as any)
-    .select('id, yield_portions, product_name, total_cost')
-    .eq('brand_id', brand_id)
-    .eq('sku', batch_sku)
-    .eq('is_active', true)
-    .single()
-
-  if (recipeErr || !recipeRow) {
-    return { error: 'لا توجد وصفة نشطة لهذا الباتش', status: 404 }
-  }
-
-  const recipe = recipeRow as any
-  const yieldPortions = Math.max(recipe.yield_portions, 1)
-
-  // ── 2. جلب مكونات الوصفة ─────────────────────────────────────────
-  const { data: ings, error: ingErr } = await (admin.from('recipe_ingredients') as any)
-    .select('ing_sku, ing_name, qty, yield_pct, unit, is_semi')
-    .eq('recipe_id', recipe.id)
-
-  if (ingErr) return { error: ingErr.message, status: 500 }
-  if (!ings?.length) return { error: 'الوصفة لا تحتوي على مكونات', status: 400 }
-
-  // ── 3. معاملات تحويل الوحدات ──────────────────────────────────────
-  const ingSkus = (ings as any[]).map((i: any) => i.ing_sku)
-  const { data: ucRows } = await (admin.from('unit_conversions') as any)
-    .select('ing_sku, factor')
-    .eq('brand_id', brand_id)
-    .in('ing_sku', ingSkus)
-  const ucMap = new Map<string, number>()
-  for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
-
-  // ── 4. حساب الاحتياجات ────────────────────────────────────────────
   type IngNeed = { sku: string; name: string; unit: string; needed: number }
-  const needs: IngNeed[] = []
-  for (const ing of ings as any[]) {
-    if ((ing.yield_pct ?? 0) <= 0) continue
-    const factor = ucMap.get(ing.ing_sku) ?? 1
-    const needed = ((ing.qty / (ing.yield_pct / 100)) / yieldPortions * qty_portions) / factor
-    needs.push({ sku: ing.ing_sku, name: ing.ing_name, unit: ing.unit ?? '—', needed })
+  let needs: IngNeed[]
+  let batchName: string
+  let costEstimate: number | null = null
+
+  if (actuals?.length) {
+    // ── مسار الكميات الفعلية ──────────────────────────────────────
+    const { data: batchRow } = await (admin.from('batches') as any)
+      .select('name')
+      .eq('brand_id', brand_id)
+      .eq('sku', batch_sku)
+      .maybeSingle()
+
+    if (!batchRow) return { error: 'لم يتم إيجاد الباتش', status: 404 }
+    batchName = (batchRow as any).name
+
+    needs = actuals
+      .filter(a => a.qty > 0)
+      .map(a => ({ sku: a.ing_sku, name: a.ing_name, unit: a.unit, needed: a.qty }))
+
+    if (!needs.length) return { error: 'لا توجد كميات فعلية صالحة', status: 400 }
+
+  } else {
+    // ── مسار الوصفة (الافتراضي) ──────────────────────────────────
+    const { data: recipeRow, error: recipeErr } = await (admin.from('recipes') as any)
+      .select('id, yield_portions, product_name, total_cost')
+      .eq('brand_id', brand_id)
+      .eq('sku', batch_sku)
+      .eq('is_active', true)
+      .single()
+
+    if (recipeErr || !recipeRow) {
+      return { error: 'لا توجد وصفة نشطة لهذا الباتش', status: 404 }
+    }
+
+    const recipe = recipeRow as any
+    batchName = recipe.product_name
+    const yieldPortions = Math.max(recipe.yield_portions, 1)
+    costEstimate = (recipe.total_cost / yieldPortions) * qty_portions
+
+    const { data: ings, error: ingErr } = await (admin.from('recipe_ingredients') as any)
+      .select('ing_sku, ing_name, qty, yield_pct, unit, is_semi')
+      .eq('recipe_id', recipe.id)
+
+    if (ingErr) return { error: ingErr.message, status: 500 }
+    if (!ings?.length) return { error: 'الوصفة لا تحتوي على مكونات', status: 400 }
+
+    const ingSkus = (ings as any[]).map((i: any) => i.ing_sku)
+    const { data: ucRows } = await (admin.from('unit_conversions') as any)
+      .select('ing_sku, factor')
+      .eq('brand_id', brand_id)
+      .in('ing_sku', ingSkus)
+    const ucMap = new Map<string, number>()
+    for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
+
+    needs = []
+    for (const ing of ings as any[]) {
+      if ((ing.yield_pct ?? 0) <= 0) continue
+      const factor = ucMap.get(ing.ing_sku) ?? 1
+      const needed = ((ing.qty / (ing.yield_pct / 100)) / yieldPortions * qty_portions) / factor
+      needs.push({ sku: ing.ing_sku, name: ing.ing_name, unit: ing.unit ?? '—', needed })
+    }
   }
 
-  // ── 5. جلب المخزون الحالي ────────────────────────────────────────
+  // ── جلب المخزون الحالي ───────────────────────────────────────────
   const { data: stockRows } = await (admin.from('stock_items') as any)
     .select('ing_sku, current_qty, min_qty, unit')
     .eq('brand_id', brand_id)
@@ -84,24 +113,50 @@ export async function executeBatchProduce(
     stockMap.set(s.ing_sku, { current_qty: s.current_qty, min_qty: s.min_qty, unit: s.unit })
 
   const { data: batchStock } = await (admin.from('stock_items') as any)
-    .select('current_qty, min_qty, unit, ing_name')
+    .select('current_qty, min_qty, unit')
     .eq('brand_id', brand_id)
     .eq('ing_sku', batch_sku)
     .maybeSingle()
 
-  // ── 6. تنفيذ الإنتاج ─────────────────────────────────────────────
-  const prodNote = userNote || `إنتاج باتش — ${recipe.product_name} × ${qty_portions}`
-  const now = new Date().toISOString()
-
-  const deductUpserts: any[] = []
-  const deductMovements: any[] = []
+  // ── إنشاء سجل جلسة الإنتاج ───────────────────────────────────────
   const warnings: string[] = []
-
   for (const n of needs) {
     const currentQty = stockMap.get(n.sku)?.current_qty ?? 0
     if (currentQty < n.needed) {
       warnings.push(`${n.name}: احتجنا ${n.needed.toFixed(3)} ولكن في المخزون ${currentQty.toFixed(3)}`)
     }
+  }
+
+  const prodNote = userNote || `إنتاج باتش — ${batchName} × ${qty_portions}`
+
+  const { data: sessionRow, error: sessionErr } = await (admin.from('production_sessions') as any)
+    .insert({
+      brand_id,
+      batch_sku,
+      batch_name: batchName,
+      qty_portions,
+      status: 'draft',
+      performed_by: performed_by ?? null,
+      note: prodNote,
+      cost_estimate: costEstimate,
+      warnings: warnings,
+    })
+    .select('id')
+    .single()
+
+  if (sessionErr || !sessionRow) {
+    return { error: sessionErr?.message ?? 'فشل إنشاء جلسة الإنتاج', status: 500 }
+  }
+
+  const sessionId = (sessionRow as any).id
+
+  // ── تنفيذ الإنتاج ─────────────────────────────────────────────────
+  const now = new Date().toISOString()
+  const deductUpserts: any[] = []
+  const deductMovements: any[] = []
+
+  for (const n of needs) {
+    const currentQty = stockMap.get(n.sku)?.current_qty ?? 0
     const newQty = Math.max(0, currentQty - n.needed)
     deductUpserts.push({
       brand_id, ing_sku: n.sku, ing_name: n.name, unit: n.unit,
@@ -113,6 +168,7 @@ export async function executeBatchProduce(
       movement_type: 'out',
       qty: Math.round(n.needed * 1000) / 1000,
       note: prodNote, performed_by,
+      production_session_id: sessionId,
     })
   }
 
@@ -122,13 +178,12 @@ export async function executeBatchProduce(
 
   await (admin.from('stock_movements') as any).insert(deductMovements)
 
-  // إضافة الباتش المنتج للمخزون
   const batchCurrentQty = (batchStock as any)?.current_qty ?? 0
   const batchNewQty = batchCurrentQty + qty_portions
 
   await (admin.from('stock_items') as any).upsert({
     brand_id, ing_sku: batch_sku,
-    ing_name: recipe.product_name,
+    ing_name: batchName,
     unit: (batchStock as any)?.unit ?? 'حصة',
     current_qty: batchNewQty,
     min_qty: (batchStock as any)?.min_qty ?? 0,
@@ -136,18 +191,20 @@ export async function executeBatchProduce(
   }, { onConflict: 'brand_id,ing_sku' })
 
   await (admin.from('stock_movements') as any).insert({
-    brand_id, ing_sku: batch_sku, ing_name: recipe.product_name,
+    brand_id, ing_sku: batch_sku, ing_name: batchName,
     movement_type: 'in',
     qty: qty_portions,
     note: prodNote, performed_by,
+    production_session_id: sessionId,
   })
 
   return {
     ok: true,
-    batch_name: recipe.product_name,
+    batch_name: batchName,
     qty_produced: qty_portions,
     batch_new_stock: batchNewQty,
     ingredients_deducted: needs.length,
     warnings,
+    session_id: sessionId,
   }
 }

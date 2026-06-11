@@ -52,6 +52,7 @@ export default function RecipeEditor() {
     currentProduct, rows, setRows, savedRecipe, setSavedRecipe,
     addRow, updateRow, removeRow,
     activeService, setActiveService,
+    forceReloadAt,
   } = useCostingStore()
   const { canSeePrices, canEdit, profile } = useUserStore()
   const { isSuperAdmin, hasPermission } = usePermissionsStore()
@@ -139,6 +140,7 @@ export default function RecipeEditor() {
     }
 
     let pricesUpdated = false
+    let bigChangeMsg: string | null = null
 
     if (rec) {
       setSavedRecipe(rec)
@@ -182,7 +184,7 @@ export default function RecipeEditor() {
             ? (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand as string).in('sku', missingRmSkus)
             : Promise.resolve({ data: [] }),
           missingBtSkus.length > 0
-            ? (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand as string).eq('is_active', true).in('sku', missingBtSkus)
+            ? (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand as string).eq('is_semi', true).eq('is_active', true).in('sku', missingBtSkus)
             : Promise.resolve({ data: [] }),
         ])
 
@@ -205,6 +207,11 @@ export default function RecipeEditor() {
         const fresh = priceMap.get(r.ing_sku)
         if (fresh !== undefined && Math.abs(fresh - r.unit_cost) > 0.0001) {
           pricesUpdated = true
+          // اكتشاف تغيّر كبير (>10×) في سعر باتش — على الأرجح خطأ في yield_portions
+          if (r.is_semi && r.unit_cost > 0.001 && (fresh / r.unit_cost > 10 || r.unit_cost / fresh > 10)) {
+            const factor = Math.round(fresh > r.unit_cost ? fresh / r.unit_cost : r.unit_cost / fresh)
+            bigChangeMsg = `⚠ سعر '${r.ing_name}' تغيّر بشكل كبير (×${factor}) — راجع بيانات الباتش`
+          }
           return { ...r, unit_cost: fresh }
         }
         return r
@@ -223,10 +230,10 @@ export default function RecipeEditor() {
     if (pricesUpdated) {
       if (rec?.is_approved) {
         setDirty(false)
-        setSaveMsg({ ok: false, text: '⚠ تغيّرت أسعار بعض المكونات منذ الاعتماد — أنشئ إصداراً جديداً للتحديث' })
+        setSaveMsg({ ok: false, text: bigChangeMsg ?? '⚠ تغيّرت أسعار بعض المكونات منذ الاعتماد — أنشئ إصداراً جديداً للتحديث' })
       } else {
         setDirty(true)
-        setSaveMsg({ ok: false, text: '⚠ تغيّرت أسعار بعض المكونات — راجع وأعد الحفظ' })
+        setSaveMsg({ ok: false, text: bigChangeMsg ?? '⚠ تغيّرت أسعار بعض المكونات — راجع وأعد الحفظ' })
       }
     } else {
       setDirty(false)
@@ -234,6 +241,14 @@ export default function RecipeEditor() {
   }, [currentProduct, brand, setSavedRecipe, setRows])
 
   useEffect(() => { Promise.all([loadRecipe(), loadVersions()]) }, [loadRecipe, loadVersions])
+
+  // إعادة التحميل عند إعادة الاحتساب الجماعي من السايدبار
+  useEffect(() => {
+    if (forceReloadAt > 0 && currentProduct) {
+      loadRecipe()
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [forceReloadAt])
 
   // ── calculations ──────────────────────────────────────────────
   const diResult = useMemo(
@@ -578,6 +593,31 @@ export default function RecipeEditor() {
     document.body.dataset.printMode = mode
     window.print()
     delete document.body.dataset.printMode
+  }
+
+  function handleExportRecipe() {
+    if (!currentProduct || rows.length === 0) return
+    const headers = ['المكوّن', 'SKU', 'النوع', 'الوحدة', 'الكمية', 'Yield%', 'سعر الوحدة', 'الإجمالي', 'القسم', 'نوع الخدمة']
+    const csvRows = rows.map(r => {
+      const total = r.yield_pct > 0 ? (r.qty / (r.yield_pct / 100)) * r.unit_cost : 0
+      return [
+        r.ing_name, r.ing_sku,
+        r.is_semi ? 'باتش' : 'مادة خام',
+        r.unit, r.qty, r.yield_pct,
+        r.unit_cost.toFixed(6), total.toFixed(4),
+        r.section, r.service_type,
+      ]
+    })
+    const csv = [headers, ...csvRows]
+      .map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `recipe-${currentProduct.sku}-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
   }
 
   // ── empty states ──────────────────────────────────────────────
@@ -1021,6 +1061,14 @@ export default function RecipeEditor() {
                 className="text-xs px-3 py-1.5 bg-green-50 hover:bg-green-100 text-green-700 border border-green-200 rounded-lg transition-colors"
               >
                 🍽 مطبخ
+              </button>
+            )}
+            {rows.length > 0 && (
+              <button
+                onClick={handleExportRecipe}
+                className="text-xs px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors"
+              >
+                ↓ تصدير المكونات
               </button>
             )}
             {isMgmt && savedRecipe && (

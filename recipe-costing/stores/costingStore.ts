@@ -7,6 +7,7 @@ interface CostingStore {
   savedRecipe: Recipe | null
   yieldPortions: number
   activeService: ServiceType
+  forceReloadAt: number
   setCurrentProduct: (p: Product | null) => void
   setRows: (rows: RecipeRowDraft[]) => void
   setSavedRecipe: (r: Recipe | null) => void
@@ -16,6 +17,7 @@ interface CostingStore {
   updateRow: (id: string, updates: Partial<RecipeRowDraft>) => void
   removeRow: (id: string) => void
   reset: () => void
+  triggerReload: () => void
 }
 
 export const useCostingStore = create<CostingStore>()((set) => ({
@@ -24,6 +26,7 @@ export const useCostingStore = create<CostingStore>()((set) => ({
   savedRecipe: null,
   yieldPortions: 1,
   activeService: 'dine_in',
+  forceReloadAt: 0,
   setCurrentProduct: (currentProduct) => set({ currentProduct }),
   setRows: (rows) => set({ rows }),
   setSavedRecipe: (savedRecipe) => set({ savedRecipe }),
@@ -34,4 +37,5 @@ export const useCostingStore = create<CostingStore>()((set) => ({
     set((s) => ({ rows: s.rows.map((r) => (r.id === id ? { ...r, ...updates } : r)) })),
   removeRow: (id) => set((s) => ({ rows: s.rows.filter((r) => r.id !== id) })),
   reset: () => set({ currentProduct: null, rows: [], savedRecipe: null, yieldPortions: 1, activeService: 'dine_in' }),
+  triggerReload: () => set((s) => ({ forceReloadAt: s.forceReloadAt + 1 })),
 }))
