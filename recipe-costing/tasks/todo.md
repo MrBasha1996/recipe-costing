@@ -2,6 +2,179 @@
 
 ---
 
+## مراجعة — 2026-06-12: إصلاحات تقنية ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `app/api/stocktake/[id]/approve/route.ts` | **C1**: استبدال `createClient + getUser()` بـ `createAdminClient + requireModulePermission(brand_id, 'inventory', 'approve')` — لا يمكن الاعتماد إلا لمن يملك صلاحية approve على نفس البراند |
+| `supabase/migrations/025_fix_production_sessions_rls.sql` | **C4**: حذف `production_sessions_all` (USING true) واستبدالها بـ 4 سياسات مقيدة تشترط `can_access_brand` + `has_module_permission` لكل عملية |
+| `app/api/production/sessions/route.ts:41-42` | **M2**: `full_name` → `name_ar` — الاسم المنفذ يظهر الآن بدل `—` |
+| `lib/produceBatch.ts:180,185,194` | **H3b**: كل `await insert/upsert` يُفحص الآن وإذا فشل يرجع `{ error, status:500 }` — لا audit trail يفشل صامتاً |
+| `stores/permissionsStore.ts:97` | **H3a**: `catch {}` → `catch(err) { console.error(...) }` — فشل تحميل الصلاحيات يظهر في السجلات |
+
+### ملاحظة مهمة — Migration 025
+يجب تشغيله في Supabase Dashboard → SQL Editor:
+```
+supabase/migrations/025_fix_production_sessions_rls.sql
+```
+
+### ما لم يُصلح (مقصود — يتطلب إعادة هيكلة)
+- **C2+C3 (Transactions)**: عمليات الإنتاج/التفجير/المشتريات بدون transactions — يحتاج تحويل كل عملية لـ Postgres RPC. مؤجل.
+- **H1 (Production approval)**: خصم المخزون يحدث عند draft لا عند approve — تغيير السلوك يؤثر على البيانات الحالية.
+- **M3 (Middleware cache staleness)**: التحسين الجزئي تم في مرحلة الأداء (permissions تُحمَّل من server). الـ 60s window مقبول.
+
+### TypeScript: 0 أخطاء
+
+---
+
+## مراجعة — 2026-06-12: إصلاحات محاسبية ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `app/(dashboard)/[brand]/reports/ReportsClient.tsx:176-185` | **C1+C2**: `loadPLMonthData` تحذف query المشتريات وتستبدلها بـ `daily_sales.cost` (COGS الفعلي). يُحسم هذا مشكلتين دفعةً واحدة: (1) COGS يعكس المبيعات الفعلية لا قيمة المشتريات، (2) القيمة بوحدة واحدة ex-VAT مثل الإيراد |
+| `app/api/purchases/apply/route.ts` | **C4**: بعد تحديث WAC للمكونات يُطلق cascade تلقائياً: يحدّث `recipe_ingredients.unit_cost` لكل وصفة متأثرة، ثم يعيد حساب `recipes.total_cost`، `food_cost_pct`، `margin`، `dine_out_*` — أرقام التكاليف تبقى حديثة |
+| `app/(dashboard)/[brand]/inventory/InventoryClient.tsx:596` | **H2**: `qty: Math.abs(variance)` → `qty: variance` — حركات الجرد تُسجَّل بعلامتها الصحيحة (موجب=زيادة، سالب=نقص)؛ سجل المراجعة يُمكن الآن من تمييز الهدر عن الزيادة |
+
+### الأثر المحاسبي
+- **P&L**: نسبة Food Cost ومجمل الربح تعكس الآن التكلفة الفعلية للمبيعات — لا تتأثر بتوقيت الشراء
+- **تكاليف الوصفات**: كل تطبيق مشتريات يُحدّث الوصفات تلقائياً — لا حاجة لإعادة حفظ كل وصفة يدوياً
+- **الجرد**: الفرق الجردي في `stock_movements` يحمل إشارته الصحيحة — يمكن حساب قيمة الهدر
+
+### ما لم يُصلح (مقصود — يحتاج migrations جديدة)
+- **C3**: لا قيمة نقدية في `stock_items` — يحتاج `ALTER TABLE stock_movements ADD COLUMN value numeric`
+- **C5**: WAC يخلط وحدات الشراء بوحدات الوصفة — يحتاج إعادة هيكلة منطق `unit_conversions`
+- **H1**: لا transactions على عمليات المخزون المتعددة — مؤجل للمرحلة التقنية
+
+### TypeScript: 0 أخطاء
+
+---
+
+## مراجعة — 2026-06-12: إصلاحات الأداء (مرحلة الأداء) ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `middleware.ts` | `getUser()` → `getSession()` — يزيل HTTP round-trip لـ Supabase Auth (~100-400ms) من كل navigation |
+| `app/(dashboard)/[brand]/layout.tsx` | يجلب `roles(is_super_admin, name)` مع profile + يجلب `role_permissions` مع join لـ modules server-side |
+| `stores/permissionsStore.ts` | إضافة `initFromServer()`: يهيدرات الـ store من بيانات الـ server بدون network calls + `subscribeToChanges()`: يفصل setup الـ realtime عن جلب البيانات |
+| `app/(dashboard)/[brand]/DashboardShell.tsx` | يستقبل `initialPermissions`, `isSuperAdmin`, `roleName` props + يستدعي `initFromServer` بدلاً من `loadPermissions` + Zustand selectors بدلاً من destructuring كامل |
+| `app/(dashboard)/[brand]/costing/page.tsx` | `RecipeEditor` → `next/dynamic` — recharts لا تُحمَّل حتى يفتح المستخدم المحرر |
+| `next.config.ts` | `experimental.staleTimes: { dynamic: 30 }` — يكاش الصفحات الديناميكية 30 ثانية في router |
+
+### الأثر المتوقع
+- **كل نقرة navigation**: توفير 100-400ms (لا auth round-trip في middleware)
+- **أول تحميل للداشبورد**: الـ sidebar يظهر فوراً (كان يتأخر 600ms+ لـ 3 client queries متسلسلة)
+- **صفحة الوصفات (costing)**: أسرع تحميل أولي — recharts لا تُحمَّل حتى الحاجة
+- **التنقل بين التبويبات**: الصفحات المزارة مؤخراً تُعاد من الـ cache (30s)
+
+### TypeScript: 0 أخطاء
+
+---
+
+---
+
+## مراجعة — 2026-06-12: 7 مهام شاملة ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `supabase/migrations/024_brands_logo_stocktake_approval.sql` | جديد: `logo_url`, `primary_color` على brands + `approved_by`, `approved_at` على stocktake_sessions |
+| `types/index.ts` | إضافة `logo_url`, `primary_color`, `delivery_commission_pct` لـ Brand + `production_session_id` لـ StockMovement |
+| `brands/page.tsx` | نموذج تعديل كامل: شعار (URL) + color picker + معاينة فورية + عمولة التوصيل |
+| `reports/ReportsClient.tsx` — PLReport | مقارنة ثلاثية: الشهر الحالي / السابق / نفس الشهر السنة الماضية (عمود السنة يظهر فقط إن وجدت بيانات) |
+| `reports/ReportsClient.tsx` — BranchesReport | ديناميكي: يجلب جميع البراندات من DB بدل hardcode 'ti','bb' — يستخدم primary_color لكل براند في المخطط |
+| `inventory/InventoryClient.tsx` — HistoryTab | عمود "المصدر": يكشف مصدر الحركة (إنتاج #XXXXXX / مشتريات / مبيعات / جرد) |
+| `inventory/InventoryClient.tsx` — StocktakeTab | زر "اعتماد" للجلسات المنتهية + badge "معتمد ✓" بعد الاعتماد |
+| `app/api/stocktake/[id]/approve/route.ts` | جديد: POST endpoint لاعتماد جلسة الجرد |
+| `ingredients/IngredientsClient.tsx` | زر "⚠ غير مرتبطة بوصفات" يفلتر الأصناف التي لم تُستخدم في أي وصفة |
+
+### قاعدة البيانات — يجب تشغيل في Supabase Dashboard
+```
+supabase/migrations/024_brands_logo_stocktake_approval.sql
+```
+
+### ملاحظات
+- **الشعار**: يُخزَّن كـ URL نصي — يمكن رفع الصورة لـ Supabase Storage ثم لصق الرابط العام
+- **P&L السنة الماضية**: العمود يظهر تلقائياً فقط إن كان الإيراد > 0 لنفس الشهر من السنة الماضية
+- **P&L البراندات**: يعتمد على `primary_color` المحفوظ في brands — إن لم يُحدَّث سيستخدم ألواناً افتراضية
+- **مصدر الحركة**: يعتمد على `production_session_id` للإنتاج، وعلى نص الملاحظة للباقي — إن أردت دقة أكبر للمشتريات/المبيعات أضف أعمدة مرجع منفصلة لاحقاً
+
+---
+
+## مراجعة — 2026-06-12: التحسينات (دور 3) ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `package.json` | xlsx → SheetJS الرسمي tarball — ثغرة Prototype Pollution High مغلقة (الآن 0 ثغرات High) |
+| `public/analytics-dashboard.html` | محذوف — كان معزولاً وغير مرجَّع ويُخدَم بدون مصادقة |
+| `.gitignore` | إضافة `dev_out.txt` و`dev_output.txt` |
+| git tracking | `git rm --cached` لـ dev_out.txt وdev_output.txt — خرجا من التتبع (يبقيان على الديسك) |
+| `eslint.config.mjs` | إصلاح: كان broken تماماً (`nextVitals is not iterable`) → تحويل إلى FlatCompat مع `next/core-web-vitals` و`next/typescript` |
+
+### ما لم يُنفَّذ (مقصود)
+- `ignoreDuringBuilds: true` في next.config.ts: ESLint يعمل الآن لكن 1886 خطأ `no-explicit-any` تمنع حذف هذا الخيار — يحتاج جلسة لمعالجة `as any` أولاً
+- **RPC ذري**: race conditions في الجرد والإنتاج — مؤجل (يحتاج migrations)
+
+### TypeScript
+**0 أخطاء** — نظيف تماماً
+
+---
+
+## مراجعة — 2026-06-12: إصلاح الأخطاء (دور 2) ✅
+
+### ما تغيّر
+
+| الملف | الإصلاح |
+|---|---|
+| `app/api/sales/explode/route.ts:167` | `new Set<string>()` — يحل خطأ TS2345 الذي كان يمنع البناء |
+| `app/(dashboard)/[brand]/reports/ReportsClient.tsx` | `BranchesReport`: نقل الـ `return` المبكر لما بعد كل الـ hooks — يحل انتهاك Rules of Hooks |
+| `app/(dashboard)/[brand]/layout.tsx` | `getValidBrands()` من DB بدل `['ti','bb']` الثابت — البراندات الجديدة تعمل الآن |
+| `app/page.tsx` | نفس الإصلاح + fallback ديناميكي من `valid[0]` |
+| `lib/auth.ts` | دالة `requireModulePermission(brandId, moduleCode, action)` جديدة — تفحص البراند + صلاحية الموديول معاً |
+| `app/api/sales/explode/route.ts` | `requireModulePermission('sales','update')` بدل `requireBrandAccess` |
+| `app/api/sales/explode-check/route.ts` | `requireModulePermission('sales','view')` |
+| `app/api/production/sessions/[id]/route.ts` | PATCH: `('production','update')` · DELETE: `('production','delete')` |
+| `app/api/production/sessions/[id]/approve/route.ts` | `requireModulePermission('production','approve')` |
+| `app/api/batches/produce/route.ts` | `requireModulePermission('production','create')` |
+| `stores/permissionsStore.ts` | تخزين مرجع channel + `supabase.removeChannel(prev)` قبل إنشاء قناة جديدة |
+| `lib/server-brand.ts` | `brandFromParam` يعود بـ `valid[0]` بدل `'bb'` الثابت |
+| `app/(dashboard)/[brand]/inventory/InventoryClient.tsx` | `handleStartSession`: `alert()` بدل فشل صامت عند خطأ إنشاء الجلسة |
+
+### TypeScript
+**0 أخطاء** — نظيف تماماً
+
+---
+
+## مراجعة — 2026-06-12: إصلاحات ثقل الموقع ✅
+
+### ما تغيّر
+
+| الملف | التغيير |
+|---|---|
+| `middleware.ts` | Cache بـ TTL لقائمة البراندات (60s) + صلاحيات الدور (60s) + بروفايل المستخدم (30s) → 3 من 4 استعلامات تختفي على الطلب الثاني |
+| `app/(dashboard)/[brand]/reports/ReportsClient.tsx` | `exportToPDF` أصبح dynamic import عند الضغط على الزر — jspdf + html2canvas (~500KB) لا تُحمَّل إلا عند الحاجة |
+| `components/costing/RecipeChartsRow.tsx` | ترحيل من `react-chartjs-2 Doughnut` → `recharts PieChart + Pie` |
+| `components/costing/RecipePriceHistory.tsx` | ترحيل من `react-chartjs-2 Line` → `recharts LineChart + Line` |
+| `package.json` | حذف `chart.js` و`react-chartjs-2` من dependencies |
+| `app/(dashboard)/[brand]/DashboardShell.tsx` | `loadAlerts` يضيف `.or('min_qty.gt.0,expiry_date.not.is.null')` — يجلب فقط الأصناف القابلة للتنبيه |
+| `components/BrandSelectorOverlay.tsx` | جلب البراندات مؤجَّل لأول فتح فعلي للـ overlay (useRef guard) |
+
+### ما لم يُصلح (مقصود)
+- `app/api/sales/explode/route.ts:167` — خطأ TypeScript موجود قبل هذه التغييرات، مخطط تنفيذه في مرحلة إصلاح الأخطاء
+
+### TypeScript
+نظيف ماعدا خطأ واحد قديم في `explode/route.ts:167` (لم نلمسه)
+
+---
+
 ## مراجعة — 2026-06-11: إصلاحات موديول المخزون ✅
 
 ### ما تغيّر

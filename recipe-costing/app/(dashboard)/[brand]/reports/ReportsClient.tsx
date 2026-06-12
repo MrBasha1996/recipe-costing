@@ -5,11 +5,10 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
-import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange } from '@/lib/period'
+import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange, shiftMonth } from '@/lib/period'
 import type { BrandId } from '@/types'
 import { VAT_RATE } from '@/lib/calculations'
 import { exportPLReport } from '@/lib/excel'
-import { exportToPDF } from '@/lib/pdf'
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -172,156 +171,418 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
 }
 
 // ── 1. P&L Report ─────────────────────────────────────────────────
+async function loadPLMonthData(supabase: any, brand: string, m: string, branch: string) {
+  const { start, end } = monthRange(m)
+  const [{ data: sales }, { data: labor }, { data: overhead }, { data: brandRow }] = await Promise.all([
+    wb((supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch),
+    (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
+    (supabase.from('overhead_costs') as any).select('amount, category').eq('brand_id', brand).eq('month', m),
+    (supabase.from('brands') as any).select('delivery_commission_pct').eq('id', brand).single(),
+  ])
+  const totalRevWithVat    = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
+  const revenue            = totalRevWithVat / VAT_RATE
+  // COGS = theoretical cost from sales explosion (daily_sales.cost), not purchases
+  const materialCost       = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
+  const laborCost          = (labor || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const overheadCost       = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const commissionPct      = (brandRow as any)?.delivery_commission_pct ?? 0
+  const deliveryCommission = revenue * commissionPct / 100
+  const totalCost          = materialCost + laborCost + overheadCost + deliveryCommission
+  const grossProfit        = revenue - materialCost
+  const netProfit          = revenue - totalCost
+  const vat                = totalRevWithVat - revenue
+  const ovByCategory = (overhead || []).reduce((acc: Record<string, number>, r: any) => {
+    acc[r.category] = (acc[r.category] ?? 0) + r.amount; return acc
+  }, {} as Record<string, number>)
+  return { revenue, totalRevWithVat, vat, materialCost, laborCost, overheadCost, deliveryCommission, commissionPct, totalCost, grossProfit, netProfit, ovByCategory }
+}
+
 function PLReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
-  const [data, setData] = useState<any>(null)
+  const [cur,  setCur]  = useState<any>(null)
+  const [prev, setPrev] = useState<any>(null)
+  const [ly,   setLy]   = useState<any>(null)
   const [loading, setLoading] = useState(true)
+
+  const prevMonth = shiftMonth(month, -1)
+  const lyMonth   = shiftMonth(month, -12)
 
   const load = useCallback(async () => {
     setLoading(true)
     const supabase = createClient()
-    const { start: monthStart, end: monthEnd } = monthRange(month)
-
-    const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }, { data: brandRow }] = await Promise.all([
-      wb((supabase.from('daily_sales') as any).select('revenue').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd), branch),
-      (supabase.from('purchases') as any).select('total_price').eq('brand_id', brand).gte('purchase_date', monthStart).lte('purchase_date', monthEnd),
-      (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
-      (supabase.from('overhead_costs') as any).select('amount, category').eq('brand_id', brand).eq('month', month),
-      (supabase.from('brands') as any).select('delivery_commission_pct').eq('id', brand).single(),
+    const [c, p, l] = await Promise.all([
+      loadPLMonthData(supabase, brand, month,     branch),
+      loadPLMonthData(supabase, brand, prevMonth, branch),
+      loadPLMonthData(supabase, brand, lyMonth,   branch),
     ])
-
-    const totalRevWithVat      = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
-    const revenue              = totalRevWithVat / VAT_RATE
-    const materialCost         = (purchases || []).reduce((s: number, r: any) => s + r.total_price, 0)
-    const laborCost            = (labor || []).reduce((s: number, r: any) => s + r.amount, 0)
-    const overheadCost         = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
-    const commissionPct        = (brandRow as any)?.delivery_commission_pct ?? 0
-    const deliveryCommission   = revenue * commissionPct / 100
-    const totalCost            = materialCost + laborCost + overheadCost + deliveryCommission
-    const grossProfit          = revenue - materialCost
-    const netProfit            = revenue - totalCost
-    const vat                  = totalRevWithVat - revenue
-
-    const ovByCategory = (overhead || []).reduce((acc: any, r: any) => {
-      acc[r.category] = (acc[r.category] || 0) + r.amount
-      return acc
-    }, {})
-
-    setData({ revenue, totalRevWithVat, vat, materialCost, laborCost, overheadCost, deliveryCommission, commissionPct, totalCost, grossProfit, netProfit, ovByCategory })
+    setCur(c); setPrev(p); setLy(l)
     setLoading(false)
-  }, [brand, month, branch])
+  }, [brand, month, branch, prevMonth, lyMonth])
 
   useEffect(() => { load() }, [load])
 
-  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
-  if (!data) return null
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ تحضير قائمة الدخل...</div>
+  if (!cur) return null
 
-  const r = data.revenue
-  const pct = (v: number) => r > 0 ? `${((v / r) * 100).toFixed(1)}%` : '—'
+  const hasLy = ly.revenue > 0
+  const N = (v: number) => Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+  const P = (v: number, b: number) => b > 0 ? `${((v / b) * 100).toFixed(1)}%` : '—'
+
+  const totalOpEx     = cur.laborCost  + cur.overheadCost  + cur.deliveryCommission
+  const totalOpExPrev = prev.laborCost + prev.overheadCost + prev.deliveryCommission
+  const totalOpExLy   = ly.laborCost   + ly.overheadCost   + ly.deliveryCommission
+  const primeCost     = cur.materialCost  + cur.laborCost
+  const primePrev     = prev.materialCost + prev.laborCost
+  const primeLy       = ly.materialCost   + ly.laborCost
+  const ovCats        = Object.entries(cur.ovByCategory ?? {}) as [string, number][]
+
+  type RowKind = 'section' | 'line' | 'sub' | 'total' | 'net' | 'sep' | 'metric'
+  interface PLRow {
+    kind: RowKind; key: string
+    label?: string; sublabel?: string; indent?: boolean
+    curV?: number; prevV?: number; lyV?: number
+    isExp?: boolean; better?: 'higher' | 'lower'
+    curPct?: string; prevPct?: string; lyPct?: string
+  }
+
+  const overheadRows: PLRow[] = ovCats.length > 1
+    ? ovCats.map(([cat, amt]) => ({
+        kind: 'line' as RowKind, key: `ovh-${cat}`,
+        label: cat, sublabel: 'Fixed Overhead', indent: true,
+        curV: amt,
+        prevV: (prev.ovByCategory as Record<string, number>)[cat] ?? 0,
+        lyV:   (ly.ovByCategory   as Record<string, number>)[cat] ?? 0,
+        isExp: true, better: 'lower' as const,
+      }))
+    : [{
+        kind: 'line' as RowKind, key: 'ovh',
+        label: 'التكاليف الثابتة والعمومية', sublabel: 'Fixed & Overhead Costs', indent: true,
+        curV: cur.overheadCost, prevV: prev.overheadCost, lyV: ly.overheadCost,
+        isExp: true, better: 'lower' as const,
+      }]
+
+  const rows: PLRow[] = [
+    { kind: 'section', key: 's1', label: 'Revenue — الإيرادات' },
+    { kind: 'line',  key: 'gross-sales', label: 'إجمالي المبيعات شامل ضريبة القيمة المضافة', sublabel: 'Gross Sales including VAT (15%)', indent: true, curV: cur.totalRevWithVat, prevV: prev.totalRevWithVat, lyV: ly.totalRevWithVat, better: 'higher' },
+    { kind: 'line',  key: 'vat',         label: 'يُطرح: ضريبة القيمة المضافة', sublabel: 'Less: Value Added Tax (15%)', indent: true, curV: cur.vat, prevV: prev.vat, lyV: ly.vat, isExp: true },
+    { kind: 'total', key: 'net-rev',     label: 'صافي الإيرادات — Net Revenue', curV: cur.revenue, prevV: prev.revenue, lyV: ly.revenue, better: 'higher' },
+    { kind: 'sep',   key: 'sep1' },
+
+    { kind: 'section', key: 's2', label: 'Cost of Sales — تكلفة البضاعة المباعة (COGS)' },
+    { kind: 'line',  key: 'cogs',        label: 'تكلفة المواد الغذائية والمشروبات', sublabel: 'Food & Beverage Cost', indent: true, curV: cur.materialCost, prevV: prev.materialCost, lyV: ly.materialCost, isExp: true, better: 'lower' },
+    { kind: 'total', key: 'gross-profit',label: 'مجمل الربح — Gross Profit', curV: cur.grossProfit, prevV: prev.grossProfit, lyV: ly.grossProfit, better: 'higher' },
+    { kind: 'metric',key: 'm-fc',        label: 'نسبة تكلفة الغذاء — Food Cost %', curPct: P(cur.materialCost, cur.revenue), prevPct: P(prev.materialCost, prev.revenue), lyPct: P(ly.materialCost, ly.revenue), better: 'lower' },
+    { kind: 'sep',   key: 'sep2' },
+
+    { kind: 'section', key: 's3', label: 'Operating Expenses — المصاريف التشغيلية' },
+    { kind: 'line',  key: 'labor',       label: 'تكاليف العمالة', sublabel: 'Labor Costs', indent: true, curV: cur.laborCost, prevV: prev.laborCost, lyV: ly.laborCost, isExp: true, better: 'lower' },
+    ...overheadRows,
+    ...(cur.deliveryCommission > 0 || prev.deliveryCommission > 0 ? [{
+      kind: 'line' as RowKind, key: 'delivery',
+      label: `عمولات منصات التوصيل (${cur.commissionPct}%)`, sublabel: 'Delivery Platform Commissions',
+      indent: true, curV: cur.deliveryCommission, prevV: prev.deliveryCommission, lyV: ly.deliveryCommission,
+      isExp: true, better: 'lower' as const,
+    }] : []),
+    { kind: 'sub',   key: 'total-opex',  label: 'إجمالي المصاريف التشغيلية — Total Operating Expenses', curV: totalOpEx, prevV: totalOpExPrev, lyV: totalOpExLy, isExp: true, better: 'lower' },
+    { kind: 'sep',   key: 'sep3' },
+
+    { kind: 'net',   key: 'net-profit',  label: 'صافي الربح — Net Profit / (Loss)', curV: cur.netProfit, prevV: prev.netProfit, lyV: ly.netProfit, better: 'higher' },
+    { kind: 'metric',key: 'm-net',       label: 'هامش صافي الربح — Net Profit Margin', curPct: P(cur.netProfit, cur.revenue), prevPct: P(prev.netProfit, prev.revenue), lyPct: P(ly.netProfit, ly.revenue), better: 'higher' },
+    { kind: 'sep',   key: 'sep4' },
+
+    { kind: 'section', key: 's4', label: 'Restaurant KPIs — مؤشرات الأداء التشغيلية' },
+    { kind: 'metric',key: 'm-prime',     label: 'Prime Cost — تكلفة الغذاء والعمالة معاً', curPct: P(primeCost, cur.revenue), prevPct: P(primePrev, prev.revenue), lyPct: P(primeLy, ly.revenue), better: 'lower' },
+    { kind: 'metric',key: 'm-labor-pct', label: 'نسبة تكاليف العمالة — Labor Cost %', curPct: P(cur.laborCost, cur.revenue), prevPct: P(prev.laborCost, prev.revenue), lyPct: P(ly.laborCost, ly.revenue), better: 'lower' },
+    { kind: 'metric',key: 'm-ovh-pct',  label: 'نسبة التكاليف الثابتة — Overhead %', curPct: P(cur.overheadCost, cur.revenue), prevPct: P(prev.overheadCost, prev.revenue), lyPct: P(ly.overheadCost, ly.revenue), better: 'lower' },
+  ]
+
+  const colSpan = hasLy ? 6 : 5
+
+  function renderRow(row: PLRow) {
+    if (row.kind === 'sep') {
+      return <tr key={row.key}><td colSpan={colSpan} className="h-2 bg-slate-50" /></tr>
+    }
+
+    if (row.kind === 'section') {
+      return (
+        <tr key={row.key}>
+          <td colSpan={colSpan} className="bg-slate-800 px-5 py-2">
+            <span className="text-[10px] font-bold tracking-widest uppercase text-white">{row.label}</span>
+          </td>
+        </tr>
+      )
+    }
+
+    if (row.kind === 'metric') {
+      return (
+        <tr key={row.key} className="bg-sky-50/70 border-b border-sky-100">
+          <td className="px-5 py-2 text-[10px] text-sky-700 italic font-medium">{row.label}</td>
+          <td className="px-3 py-2 text-center text-xs font-mono font-bold text-sky-800">{row.curPct}</td>
+          <td className="px-3 py-2 text-center text-xs font-mono text-sky-400">{row.prevPct}</td>
+          {hasLy && <td className="px-3 py-2 text-center text-xs font-mono text-sky-300">{row.lyPct}</td>}
+          <td /><td />
+        </tr>
+      )
+    }
+
+    const v     = row.curV  ?? 0
+    const vPrev = row.prevV ?? 0
+    const vLy   = row.lyV   ?? 0
+    const isExp = row.isExp ?? false
+
+    const fmtAmt = (val: number, expense: boolean) => {
+      if (val === 0) return <span className="text-slate-300 font-mono text-xs" dir="ltr">—</span>
+      const abs = N(Math.abs(val))
+      const txt = expense ? `(${abs})` : (val < 0 ? `(${abs})` : abs)
+      const cls = expense ? 'text-slate-600' : (val < 0 ? 'text-red-600' : 'text-slate-800')
+      return <span className={`font-mono text-xs ${cls}`} dir="ltr">{txt}</span>
+    }
+
+    const base    = Math.abs(vPrev)
+    const cur_abs = Math.abs(v)
+    const diffPct = base > 0 ? ((cur_abs - base) / base) * 100 : 0
+    const up      = cur_abs > base
+    const good    = row.better === 'higher' ? up : !up
+    const deltaEl = base > 0
+      ? <span className={`text-[10px] font-semibold ${good ? 'text-emerald-600' : 'text-red-500'}`}>{up ? '▲' : '▼'} {Math.abs(diffPct).toFixed(1)}%</span>
+      : <span className="text-slate-200 text-[10px]">—</span>
+
+    const pctEl = cur.revenue > 0
+      ? <span className="text-[10px] font-mono text-slate-400">{P(Math.abs(v), cur.revenue)}</span>
+      : null
+
+    if (row.kind === 'line') return (
+      <tr key={row.key} className="border-b border-slate-100 hover:bg-slate-50/40 transition-colors">
+        <td className={`py-2.5 ${row.indent ? 'pl-8 pr-4' : 'px-5'}`}>
+          <div className="text-xs text-slate-700">{row.label}</div>
+          {row.sublabel && <div className="text-[10px] text-slate-400 mt-0.5 font-mono">{row.sublabel}</div>}
+        </td>
+        <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
+        <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
+        {hasLy && <td className="px-3 py-2.5 text-right opacity-35">{fmtAmt(vLy, isExp)}</td>}
+        <td className="px-3 py-2.5 text-center">{pctEl}</td>
+        <td className="px-3 py-2.5 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'sub') return (
+      <tr key={row.key} className="bg-slate-100 border-t border-slate-300">
+        <td className="px-5 py-2.5">
+          <span className="text-xs font-semibold text-slate-700">{row.label}</span>
+        </td>
+        <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
+        <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
+        {hasLy && <td className="px-3 py-2.5 text-right opacity-35">{fmtAmt(vLy, isExp)}</td>}
+        <td className="px-3 py-2.5 text-center">{pctEl}</td>
+        <td className="px-3 py-2.5 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'total') return (
+      <tr key={row.key} className="bg-slate-200 border-t-2 border-slate-400">
+        <td className="px-5 py-3">
+          <span className="text-sm font-bold text-slate-800">{row.label}</span>
+        </td>
+        <td className="px-3 py-3 text-right">
+          <span className={`font-mono text-sm font-bold ${v < 0 ? 'text-red-700' : 'text-slate-800'}`} dir="ltr">
+            {v < 0 ? `(${N(Math.abs(v))})` : N(v)}
+          </span>
+        </td>
+        <td className="px-3 py-3 text-right opacity-55">
+          <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-600' : 'text-slate-600'}`} dir="ltr">
+            {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
+          </span>
+        </td>
+        {hasLy && <td className="px-3 py-3 text-right opacity-35">
+          <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-600' : 'text-slate-600'}`} dir="ltr">
+            {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
+          </span>
+        </td>}
+        <td className="px-3 py-3 text-center">
+          <span className="text-xs font-mono font-bold text-slate-500">{P(Math.abs(v), cur.revenue)}</span>
+        </td>
+        <td className="px-3 py-3 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'net') {
+      const isLoss = v < 0
+      return (
+        <tr key={row.key} className={`border-t-2 ${isLoss ? 'bg-red-50 border-red-400' : 'bg-emerald-50 border-emerald-500'}`}>
+          <td className="px-5 py-3">
+            <span className={`text-sm font-bold ${isLoss ? 'text-red-800' : 'text-emerald-800'}`}>{row.label}</span>
+          </td>
+          <td className="px-3 py-3 text-right">
+            <span className={`font-mono text-sm font-bold ${isLoss ? 'text-red-700' : 'text-emerald-700'}`} dir="ltr">
+              {v < 0 ? `(${N(Math.abs(v))})` : N(v)} ر.س
+            </span>
+          </td>
+          <td className="px-3 py-3 text-right opacity-70">
+            <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-500' : 'text-slate-600'}`} dir="ltr">
+              {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
+            </span>
+          </td>
+          {hasLy && <td className="px-3 py-3 text-right opacity-50">
+            <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-500' : 'text-slate-600'}`} dir="ltr">
+              {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
+            </span>
+          </td>}
+          <td className="px-3 py-3 text-center">
+            <span className={`text-xs font-mono font-bold ${isLoss ? 'text-red-600' : 'text-emerald-600'}`}>{P(v, cur.revenue)}</span>
+          </td>
+          <td className="px-3 py-3 text-center">{deltaEl}</td>
+        </tr>
+      )
+    }
+
+    return null
+  }
+
+  const kpiCards = [
+    { en: 'Net Revenue',   ar: 'صافي الإيرادات',   v: cur.revenue,    pct: null,                        color: 'border-t-blue-500',    txt: 'text-blue-700' },
+    { en: 'Gross Profit',  ar: 'مجمل الربح',        v: cur.grossProfit, pct: P(cur.grossProfit, cur.revenue), color: 'border-t-emerald-500', txt: 'text-emerald-700' },
+    { en: 'Food Cost %',   ar: 'نسبة تكلفة الغذاء', v: null,            pct: P(cur.materialCost, cur.revenue), color: 'border-t-orange-500', txt: cur.revenue > 0 && (cur.materialCost / cur.revenue) * 100 <= 32 ? 'text-emerald-600' : 'text-orange-600' },
+    { en: 'Net Profit',    ar: 'صافي الربح',         v: cur.netProfit,  pct: P(cur.netProfit, cur.revenue),   color: cur.netProfit >= 0 ? 'border-t-emerald-600' : 'border-t-red-500', txt: cur.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700' },
+  ]
 
   const barData = [
-    { name: 'الإيراد', value: r },
-    { name: 'المواد الخام', value: data.materialCost },
-    { name: 'العمالة', value: data.laborCost },
-    { name: 'التشغيل', value: data.overheadCost },
-    { name: 'صافي الربح', value: Math.max(0, data.netProfit) },
+    { name: 'الإيرادات',  cur: cur.revenue,               prev: prev.revenue },
+    { name: 'مجمل الربح', cur: cur.grossProfit,            prev: prev.grossProfit },
+    { name: 'صافي الربح', cur: Math.max(0, cur.netProfit), prev: Math.max(0, prev.netProfit) },
   ]
 
   const pieData = [
-    { name: 'مواد خام', value: data.materialCost },
-    { name: 'عمالة', value: data.laborCost },
-    { name: 'تشغيل', value: data.overheadCost },
-    { name: 'ربح صافي', value: Math.max(0, data.netProfit) },
+    { name: 'المواد الغذائية', value: cur.materialCost },
+    { name: 'العمالة',          value: cur.laborCost },
+    { name: 'التكاليف الثابتة', value: cur.overheadCost },
+    ...(cur.deliveryCommission > 0 ? [{ name: 'عمولات التوصيل', value: cur.deliveryCommission }] : []),
+    { name: 'صافي الربح',       value: Math.max(0, cur.netProfit) },
   ].filter(d => d.value > 0)
 
-  return (
-    <div className="space-y-6" id="pl-report-content">
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard label="الإيراد (قبل VAT)" value={`${r.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={`VAT: ${data.vat.toFixed(0)} ر.س`} color="text-blue-700" />
-        <KpiCard label="إجمالي التكاليف" value={`${data.totalCost.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.totalCost)} color="text-red-600" />
-        <KpiCard label="مجمل الربح (Gross)" value={`${data.grossProfit.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.grossProfit)} color={data.grossProfit >= 0 ? 'text-green-600' : 'text-red-600'} />
-        <KpiCard label="صافي الربح (Net)" value={`${data.netProfit.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`} sub={pct(data.netProfit)} color={data.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700'} />
-      </div>
+  const kpiPerf = [
+    { label: 'Food Cost %',   val: cur.revenue > 0 ? (cur.materialCost / cur.revenue) * 100 : 0, target: 32, targetLbl: '≤ 32%', higherGood: false },
+    { label: 'Prime Cost %',  val: cur.revenue > 0 ? (primeCost / cur.revenue) * 100 : 0,        target: 60, targetLbl: '≤ 60%', higherGood: false },
+    { label: 'Gross Margin %',val: cur.revenue > 0 ? (cur.grossProfit / cur.revenue) * 100 : 0,  target: 65, targetLbl: '≥ 65%', higherGood: true  },
+    { label: 'Net Margin %',  val: cur.revenue > 0 ? (cur.netProfit / cur.revenue) * 100 : 0,    target: 15, targetLbl: '≥ 15%', higherGood: true  },
+  ]
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* P&L Table */}
-        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
-            <span className="font-semibold text-gray-900">بيان الأرباح والخسائر — {formatYearMonth(month)}</span>
-            <div className="flex gap-2">
-              <button
-                onClick={() => exportPLReport({ month, brand, revenue: r, materialCost: data.materialCost, laborCost: data.laborCost, overheadCost: data.overheadCost, rows: [] }).catch(console.error)}
-                className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600"
-              >
-                ⬇ Excel
-              </button>
-              <button
-                onClick={() => exportToPDF('pl-report-content', `تقرير-الأرباح-${month}`).catch(console.error)}
-                className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600"
-              >
-                ⬇ PDF
-              </button>
+  return (
+    <div className="space-y-5" id="pl-report-content">
+      {/* ─── Formal Header Card ─── */}
+      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="bg-slate-800 px-6 py-4 flex items-start justify-between">
+          <div>
+            <div className="text-[9px] tracking-[0.25em] text-slate-400 uppercase font-medium">Income Statement / IFRS Presentation</div>
+            <h2 className="text-lg font-bold text-white mt-1">قائمة الدخل</h2>
+            <div className="text-slate-400 text-xs mt-1">
+              للفترة المنتهية في {formatYearMonth(month)} · بالريال السعودي (SAR)
             </div>
           </div>
-          <table suppressHydrationWarning className="w-full text-sm">
-            <tbody>
-              {[
-                { label: 'الإيراد (قبل VAT)',    value: r,                   bold: true,  color: 'text-blue-700' },
-                { label: 'ضريبة القيمة المضافة', value: data.vat,             color: 'text-gray-500' },
-                { label: '─',                     value: null },
-                { label: 'تكلفة المواد الخام',   value: -data.materialCost,   color: 'text-red-600' },
-                { label: 'مجمل الربح (Gross Profit)', value: data.grossProfit, bold: true, color: data.grossProfit >= 0 ? 'text-green-700' : 'text-red-700' },
-                { label: '─',                     value: null },
-                { label: 'تكاليف العمالة',        value: -data.laborCost,      color: 'text-red-500' },
-                { label: 'التكاليف الثابتة',      value: -data.overheadCost,   color: 'text-red-500' },
-                ...(data.deliveryCommission > 0 ? [{ label: `عمولة منصات التوصيل (${data.commissionPct}%)`, value: -data.deliveryCommission, color: 'text-red-500' }] : []),
-                { label: '─',                     value: null },
-                { label: 'صافي الربح (Net Profit)', value: data.netProfit,    bold: true, color: data.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700' },
-                { label: 'هامش صافي الربح',        value: null,               pct: pct(data.netProfit), color: 'text-gray-500' },
-              ].map((row, i) => row.label === '─' ? (
-                <tr key={i}><td colSpan={3} className="px-4 py-1"><hr className="border-gray-200" /></td></tr>
-              ) : (
-                <tr key={i} className={`${row.bold ? 'bg-gray-50' : ''} border-b border-gray-100`}>
-                  <td className={`px-4 py-3 ${row.bold ? 'font-semibold' : ''} text-gray-700`}>{row.label}</td>
-                  <td className={`px-4 py-3 text-left font-mono ${row.bold ? 'font-bold text-base' : ''} ${row.color ?? 'text-gray-800'}`}>
-                    {row.value != null ? `${row.value >= 0 ? '' : ''}${Math.abs(row.value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ر.س` : row.pct ?? ''}
-                  </td>
-                  <td className="px-4 py-3 text-left text-xs text-gray-400 font-mono">
-                    {row.value != null && r > 0 ? pct(Math.abs(row.value)) : ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={() => exportPLReport({ month, brand, revenue: cur.revenue, materialCost: cur.materialCost, laborCost: cur.laborCost, overheadCost: cur.overheadCost, rows: [] }).catch(console.error)}
+              className="text-[11px] px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-colors"
+            >⬇ Excel</button>
+            <button
+              onClick={() => import('@/lib/pdf').then(m => m.exportToPDF('pl-report-content', `قائمة-الدخل-${month}`)).catch(console.error)}
+              className="text-[11px] px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-colors"
+            >⬇ PDF</button>
+          </div>
+        </div>
+        {/* KPI Ribbon */}
+        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-x-reverse divide-slate-100 border-t border-slate-100">
+          {kpiCards.map((k, i) => (
+            <div key={i} className={`px-5 py-4 border-t-4 ${k.color}`}>
+              <div className="text-[9px] text-slate-400 uppercase tracking-widest font-medium">{k.en}</div>
+              <div className="text-xs text-slate-500 mt-0.5">{k.ar}</div>
+              <div className={`text-xl font-bold font-mono mt-1.5 ${k.txt}`}>
+                {k.v != null ? `${N(k.v)} ر.س` : k.pct}
+              </div>
+              {k.pct && k.v != null && <div className="text-[10px] text-slate-400 font-mono mt-0.5">{k.pct} من الإيراد</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        {/* ─── Main P&L Table ─── */}
+        <div className="xl:col-span-2 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+          {/* Column Headers */}
+          <div className="bg-slate-50 border-b border-slate-200 grid text-[10px] font-semibold uppercase tracking-wide"
+            style={{ gridTemplateColumns: hasLy ? '1fr 100px 88px 78px 55px 62px' : '1fr 110px 96px 55px 62px' }}>
+            <div className="px-5 py-2.5 text-slate-500">البند / Item</div>
+            <div className="px-3 py-2.5 text-right text-blue-600">{formatYearMonth(month)}</div>
+            <div className="px-3 py-2.5 text-right text-slate-400">{formatYearMonth(prevMonth)}</div>
+            {hasLy && <div className="px-3 py-2.5 text-right text-purple-400">{formatYearMonth(lyMonth)}</div>}
+            <div className="px-3 py-2.5 text-center text-slate-400">% إيراد</div>
+            <div className="px-3 py-2.5 text-center text-slate-400">تغيّر</div>
+          </div>
+          <table suppressHydrationWarning className="w-full">
+            <tbody>{rows.map(row => renderRow(row))}</tbody>
           </table>
+          <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100">
+            <p className="text-[9px] text-slate-400 italic">
+              * جميع الأرقام بالريال السعودي (SAR) · الإيرادات معروضة صافية من ضريبة القيمة المضافة · يُعدّ هذا التقرير للأغراض الإدارية الداخلية
+            </p>
+          </div>
         </div>
 
-        {/* Charts */}
+        {/* ─── Side Panels ─── */}
         <div className="space-y-4">
-          <div className="bg-white border border-gray-200 rounded-xl p-4">
-            <p className="text-xs font-medium text-gray-500 mb-3">توزيع التكاليف والإيراد</p>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={barData} margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                  {barData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                </Bar>
+          {/* Grouped bar */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-slate-400 mb-3 uppercase tracking-wider">مقارنة الفترات</p>
+            <ResponsiveContainer width="100%" height={190}>
+              <BarChart data={barData} margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip formatter={(v: any) => [`${Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`]} />
+                <Legend iconSize={8} formatter={(v: string) => <span style={{ fontSize: 10 }}>{v === 'cur' ? formatYearMonth(month) : formatYearMonth(prevMonth)}</span>} />
+                <Bar dataKey="cur"  name="cur"  fill="#1d4ed8" radius={[3,3,0,0]} />
+                <Bar dataKey="prev" name="prev" fill="#94a3b8" radius={[3,3,0,0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="bg-white border border-gray-200 rounded-xl p-4">
-            <p className="text-xs font-medium text-gray-500 mb-3">توزيع التكاليف</p>
-            <ResponsiveContainer width="100%" height={180}>
+
+          {/* Cost donut */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-slate-400 mb-3 uppercase tracking-wider">هيكل التكاليف والربح</p>
+            <ResponsiveContainer width="100%" height={165}>
               <PieChart>
-                <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={3} dataKey="value">
-                  {pieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2} dataKey="value">
+                  {pieData.map((_, i) => <Cell key={i} fill={['#ef4444','#f97316','#eab308','#6366f1','#22c55e'][i % 5]} />)}
                 </Pie>
-                <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
-                <Legend iconType="circle" iconSize={10} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
+                <Tooltip formatter={(v: any) => [`${Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`]} />
+                <Legend iconType="circle" iconSize={8} formatter={(v: any) => <span style={{ fontSize: 10 }}>{v}</span>} />
               </PieChart>
             </ResponsiveContainer>
+          </div>
+
+          {/* KPI Performance Scorecard */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">تقييم الأداء التشغيلي</p>
+            {kpiPerf.map(k => {
+              const good = k.higherGood ? k.val >= k.target : k.val <= k.target
+              const barW = k.higherGood
+                ? Math.min(100, (k.val / (k.target * 1.6)) * 100)
+                : Math.min(100, (k.val / (k.target * 1.6)) * 100)
+              return (
+                <div key={k.label}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div>
+                      <span className="text-xs font-medium text-slate-700">{k.label}</span>
+                      <span className="text-[9px] text-slate-400 mr-1.5">(الهدف {k.targetLbl})</span>
+                    </div>
+                    <span className={`text-xs font-bold font-mono ${good ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {k.val.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                    <div className={`h-full rounded-full ${good ? 'bg-emerald-400' : 'bg-red-400'}`} style={{ width: `${barW}%` }} />
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       </div>
@@ -1629,101 +1890,111 @@ function TrendsReport({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow
 
 function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcLow?: number; fcHigh?: number }) {
   const { profile } = useUserStore()
-  const [data, setData] = useState<any>(null)
+  const [brandList, setBrandList] = useState<{ id: string; name_ar: string; primary_color?: string }[]>([])
+  const [brandData, setBrandData] = useState<Record<string, any>>({})
   const [loading, setLoading] = useState(true)
 
-  if (profile?.brand_access !== 'all') {
-    return (
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center">
-        <p className="text-amber-800 font-semibold text-sm">هذه الميزة تتطلب صلاحية الوصول لكلا الفرعين</p>
-        <p className="text-amber-600 text-xs mt-1">تواصل مع مدير النظام للحصول على صلاحية "الكل"</p>
-      </div>
-    )
-  }
-
   useEffect(() => {
+    // guard: بعد التحقق من الصلاحية داخل الـ effect لا قبله
+    if (profile?.brand_access !== 'all') return
     const load = async () => {
       setLoading(true)
       const supabase = createClient()
       const { start, end } = monthRange(month)
 
-      const brands = ['ti', 'bb'] as const
-      const [ti, bb] = await Promise.all(brands.map(async (b) => {
+      const { data: brands } = await (supabase.from('brands') as any)
+        .select('id, name_ar, primary_color').order('id')
+
+      const allBrands = (brands || []) as { id: string; name_ar: string; primary_color?: string }[]
+      setBrandList(allBrands)
+
+      const results = await Promise.all(allBrands.map(async (b) => {
         const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }] = await Promise.all([
-          (supabase.from('daily_sales') as any).select('revenue').eq('brand_id', b).gte('sale_date', start).lte('sale_date', end),
-          (supabase.from('purchases') as any).select('total_price').eq('brand_id', b).gte('purchase_date', start).lte('purchase_date', end),
-          (supabase.from('labor_costs') as any).select('amount').eq('brand_id', b).eq('month', month),
-          (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', b).eq('month', month),
+          (supabase.from('daily_sales') as any).select('revenue').eq('brand_id', b.id).gte('sale_date', start).lte('sale_date', end),
+          (supabase.from('purchases') as any).select('total_price').eq('brand_id', b.id).gte('purchase_date', start).lte('purchase_date', end),
+          (supabase.from('labor_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
+          (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
         ])
         const rev = (sales     || []).reduce((s: number, r: any) => s + r.revenue, 0) / VAT_RATE
         const mat = (purchases || []).reduce((s: number, r: any) => s + r.total_price, 0)
         const lab = (labor     || []).reduce((s: number, r: any) => s + r.amount, 0)
         const ovh = (overhead  || []).reduce((s: number, r: any) => s + r.amount, 0)
-        return {
+        return [b.id, {
           rev, mat, lab, ovh,
-          fcPct:      rev > 0 ? (mat / rev) * 100 : 0,
-          laborPct:   rev > 0 ? (lab / rev) * 100 : 0,
-          ovhPct:     rev > 0 ? (ovh / rev) * 100 : 0,
-          netMargin:  rev > 0 ? ((rev - mat - lab - ovh) / rev) * 100 : 0,
-          netProfit:  rev - mat - lab - ovh,
-        }
+          fcPct:     rev > 0 ? (mat / rev) * 100 : 0,
+          laborPct:  rev > 0 ? (lab / rev) * 100 : 0,
+          ovhPct:    rev > 0 ? (ovh / rev) * 100 : 0,
+          netMargin: rev > 0 ? ((rev - mat - lab - ovh) / rev) * 100 : 0,
+          netProfit: rev - mat - lab - ovh,
+        }] as [string, any]
       }))
 
-      const combined = {
-        rev: ti.rev + bb.rev,
-        mat: ti.mat + bb.mat,
-        lab: ti.lab + bb.lab,
-        ovh: ti.ovh + bb.ovh,
-        netProfit: ti.netProfit + bb.netProfit,
-      }
+      const map = Object.fromEntries(results)
+      const combined = allBrands.reduce((acc, b) => {
+        const d = map[b.id]
+        return { rev: acc.rev + d.rev, mat: acc.mat + d.mat, lab: acc.lab + d.lab, ovh: acc.ovh + d.ovh, netProfit: acc.netProfit + d.netProfit }
+      }, { rev: 0, mat: 0, lab: 0, ovh: 0, netProfit: 0 })
       const cRev = combined.rev
-      setData({
-        ti, bb,
-        combined: {
-          ...combined,
-          fcPct:     cRev > 0 ? (combined.mat / cRev) * 100 : 0,
-          laborPct:  cRev > 0 ? (combined.lab / cRev) * 100 : 0,
-          ovhPct:    cRev > 0 ? (combined.ovh / cRev) * 100 : 0,
-          netMargin: cRev > 0 ? (combined.netProfit / cRev) * 100 : 0,
-        },
-      })
+      map['__combined'] = {
+        ...combined,
+        fcPct:     cRev > 0 ? (combined.mat / cRev) * 100 : 0,
+        laborPct:  cRev > 0 ? (combined.lab / cRev) * 100 : 0,
+        ovhPct:    cRev > 0 ? (combined.ovh / cRev) * 100 : 0,
+        netMargin: cRev > 0 ? (combined.netProfit / cRev) * 100 : 0,
+      }
+
+      setBrandData(map)
       setLoading(false)
     }
     load()
-  }, [month])
+  }, [month, profile?.brand_access])
+
+  if (profile?.brand_access !== 'all') {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center">
+        <p className="text-amber-800 font-semibold text-sm">هذه الميزة تتطلب صلاحية الوصول لجميع البراندات</p>
+        <p className="text-amber-600 text-xs mt-1">تواصل مع مدير النظام للحصول على صلاحية "الكل"</p>
+      </div>
+    )
+  }
 
   if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
-  if (!data) return null
+  if (!Object.keys(brandData).length) return null
 
   const fmt = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' ر.س'
   const fmtPct = (v: number) => v > 0 ? `${v.toFixed(1)}%` : '—'
   const fcColor = (v: number) => v <= fcLow ? 'text-green-600' : v <= fcHigh ? 'text-amber-600' : v > 0 ? 'text-red-600' : 'text-gray-300'
   const marginColor = (v: number) => v >= 20 ? 'text-green-600' : v >= 10 ? 'text-amber-600' : v > 0 ? 'text-red-600' : 'text-gray-300'
 
-  const cols = [
-    { key: 'ti',       label: 'Three In',   color: '#3b82f6' },
-    { key: 'bb',       label: 'باب البلد',  color: '#10b981' },
-    { key: 'combined', label: 'الإجمالي',  color: '#8b5cf6' },
+  const BRAND_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6']
+
+  const displayCols = [
+    ...brandList.map((b, i) => ({ key: b.id, label: b.name_ar, color: b.primary_color ?? BRAND_COLORS[i % BRAND_COLORS.length] })),
+    { key: '__combined', label: 'الإجمالي', color: '#8b5cf6' },
   ]
 
-  const chartData = [
-    { name: 'الإيراد',    ti: data.ti.rev,    bb: data.bb.rev    },
-    { name: 'المشتريات',  ti: data.ti.mat,    bb: data.bb.mat    },
-    { name: 'العمالة',    ti: data.ti.lab,    bb: data.bb.lab    },
-    { name: 'التشغيل',   ti: data.ti.ovh,    bb: data.bb.ovh    },
-    { name: 'صافي الربح', ti: Math.max(0, data.ti.netProfit), bb: Math.max(0, data.bb.netProfit) },
-  ]
+  const chartCategories = ['الإيراد', 'المشتريات', 'العمالة', 'التشغيل', 'صافي الربح']
+  const chartData = chartCategories.map(name => {
+    const row: any = { name }
+    brandList.forEach(b => {
+      const d = brandData[b.id]
+      if (!d) return
+      row[b.id] = name === 'الإيراد' ? d.rev : name === 'المشتريات' ? d.mat : name === 'العمالة' ? d.lab : name === 'التشغيل' ? d.ovh : Math.max(0, d.netProfit)
+    })
+    return row
+  })
 
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-base font-semibold text-gray-900">مقارنة الفروع — {formatYearMonth(month)}</h2>
-        <p className="text-xs text-gray-500 mt-0.5">أداء Three In وباب البلد جنباً إلى جنب</p>
+        <h2 className="text-base font-semibold text-gray-900">مقارنة البراندات — {formatYearMonth(month)}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">أداء جميع البراندات جنباً إلى جنب</p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {cols.map(({ key, label, color }) => {
-          const d = data[key as keyof typeof data] as any
+      <div className={`grid gap-4 grid-cols-1 ${displayCols.length <= 3 ? 'md:grid-cols-3' : displayCols.length <= 4 ? 'md:grid-cols-4' : 'md:grid-cols-3 lg:grid-cols-' + Math.min(displayCols.length, 5)}`}>
+        {displayCols.map(({ key, label, color }) => {
+          const d = brandData[key]
+          if (!d) return null
           return (
             <div key={key} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-100" style={{ borderLeftColor: color, borderLeftWidth: 3 }}>
@@ -1731,13 +2002,13 @@ function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcL
               </div>
               <div className="p-4 space-y-2.5 text-sm">
                 {[
-                  { label: 'الإيراد',          value: fmt(d.rev),            cls: 'text-blue-700 font-bold' },
-                  { label: 'المشتريات',         value: fmt(d.mat),            cls: 'text-red-600' },
-                  { label: 'FC%',               value: fmtPct(d.fcPct),       cls: fcColor(d.fcPct) + ' font-semibold' },
-                  { label: 'عمالة%',            value: fmtPct(d.laborPct),    cls: 'text-purple-600' },
-                  { label: 'تشغيل%',           value: fmtPct(d.ovhPct),      cls: 'text-amber-600' },
-                  { label: 'هامش صافي%',        value: fmtPct(d.netMargin),   cls: marginColor(d.netMargin) + ' font-bold' },
-                  { label: 'صافي الربح',        value: fmt(d.netProfit),      cls: d.netProfit >= 0 ? 'text-emerald-700 font-bold' : 'text-red-700 font-bold' },
+                  { label: 'الإيراد',     value: fmt(d.rev),          cls: 'text-blue-700 font-bold' },
+                  { label: 'المشتريات',   value: fmt(d.mat),          cls: 'text-red-600' },
+                  { label: 'FC%',         value: fmtPct(d.fcPct),     cls: fcColor(d.fcPct) + ' font-semibold' },
+                  { label: 'عمالة%',      value: fmtPct(d.laborPct),  cls: 'text-purple-600' },
+                  { label: 'تشغيل%',     value: fmtPct(d.ovhPct),    cls: 'text-amber-600' },
+                  { label: 'هامش صافي%', value: fmtPct(d.netMargin), cls: marginColor(d.netMargin) + ' font-bold' },
+                  { label: 'صافي الربح', value: fmt(d.netProfit),    cls: d.netProfit >= 0 ? 'text-emerald-700 font-bold' : 'text-red-700 font-bold' },
                 ].map(row => (
                   <div key={row.label} className="flex justify-between items-center">
                     <span className="text-gray-500">{row.label}</span>
@@ -1751,16 +2022,17 @@ function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcL
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-4">
-        <p className="text-xs font-medium text-gray-500 mb-3">مقارنة التكاليف والإيراد بين الفرعين</p>
-        <ResponsiveContainer width="100%" height={240}>
+        <p className="text-xs font-medium text-gray-500 mb-3">مقارنة التكاليف والإيراد بين البراندات</p>
+        <ResponsiveContainer width="100%" height={260}>
           <BarChart data={chartData} margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
             <XAxis dataKey="name" tick={{ fontSize: 11 }} />
             <YAxis tick={{ fontSize: 11 }} />
             <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
-            <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
-            <Bar dataKey="ti" name="Three In" fill="#3b82f6" radius={[3, 3, 0, 0]} />
-            <Bar dataKey="bb" name="باب البلد" fill="#10b981" radius={[3, 3, 0, 0]} />
+            <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ fontSize: 11 }}>{brandList.find(b => b.id === v)?.name_ar ?? v}</span>} />
+            {brandList.map((b, i) => (
+              <Bar key={b.id} dataKey={b.id} name={b.id} fill={b.primary_color ?? BRAND_COLORS[i % BRAND_COLORS.length]} radius={[3, 3, 0, 0]} />
+            ))}
           </BarChart>
         </ResponsiveContainer>
       </div>

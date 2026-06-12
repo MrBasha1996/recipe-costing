@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireBrandAccess, isAuthError } from '@/lib/auth'
+import { requireModulePermission, isAuthError } from '@/lib/auth'
 
 // ── مساعد: جلب الجلسة والتحقق من الملكية ───────────────────────────
 async function getSession(admin: any, id: string, brand_id: string) {
@@ -26,7 +26,7 @@ export async function PATCH(
   const brand_id = searchParams.get('brand_id') ?? ''
   if (!brand_id) return NextResponse.json({ error: 'brand_id مطلوب' }, { status: 400 })
 
-  const user = await requireBrandAccess(brand_id)
+  const user = await requireModulePermission(brand_id, 'production', 'update')
   if (isAuthError(user)) return user
 
   const Schema = z.object({
@@ -66,7 +66,7 @@ export async function DELETE(
   const brand_id = searchParams.get('brand_id') ?? ''
   if (!brand_id) return NextResponse.json({ error: 'brand_id مطلوب' }, { status: 400 })
 
-  const user = await requireBrandAccess(brand_id)
+  const user = await requireModulePermission(brand_id, 'production', 'delete')
   if (isAuthError(user)) return user
 
   const admin = createAdminClient()

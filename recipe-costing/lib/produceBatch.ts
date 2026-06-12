@@ -177,12 +177,13 @@ export async function executeBatchProduce(
     .upsert(deductUpserts, { onConflict: 'brand_id,ing_sku' })
   if (deductErr) return { error: deductErr.message, status: 500 }
 
-  await (admin.from('stock_movements') as any).insert(deductMovements)
+  const { error: movErr } = await (admin.from('stock_movements') as any).insert(deductMovements)
+  if (movErr) return { error: movErr.message, status: 500 }
 
   const batchCurrentQty = (batchStock as any)?.current_qty ?? 0
   const batchNewQty = batchCurrentQty + qty_portions
 
-  await (admin.from('stock_items') as any).upsert({
+  const { error: batchStockErr } = await (admin.from('stock_items') as any).upsert({
     brand_id, ing_sku: batch_sku,
     ing_name: batchName,
     unit: (batchStock as any)?.unit ?? 'حصة',
@@ -190,14 +191,16 @@ export async function executeBatchProduce(
     min_qty: (batchStock as any)?.min_qty ?? 0,
     updated_at: now,
   }, { onConflict: 'brand_id,ing_sku' })
+  if (batchStockErr) return { error: batchStockErr.message, status: 500 }
 
-  await (admin.from('stock_movements') as any).insert({
+  const { error: batchMovErr } = await (admin.from('stock_movements') as any).insert({
     brand_id, ing_sku: batch_sku, ing_name: batchName,
     movement_type: 'in',
     qty: qty_portions,
     note: prodNote, performed_by,
     production_session_id: sessionId,
   })
+  if (batchMovErr) return { error: batchMovErr.message, status: 500 }
 
   return {
     ok: true,

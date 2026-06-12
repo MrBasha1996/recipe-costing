@@ -1,18 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Line } from 'react-chartjs-2'
 import {
-  Chart as ChartJS,
-  CategoryScale, LinearScale,
-  PointElement, LineElement,
-  Tooltip, Legend,
-} from 'chart.js'
+  LineChart, Line, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer,
+} from 'recharts'
 import { createClient } from '@/lib/supabase/client'
 import type { BrandId } from '@/types'
 import { C, MONO } from './theme'
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend)
 
 interface Props {
   sku: string
@@ -21,6 +16,7 @@ interface Props {
 
 interface HistoryPoint {
   month: string
+  label: string
   di: number | null
   do_: number | null
   app: number | null
@@ -67,7 +63,11 @@ export default function RecipePriceHistory({ sku, brand }: Props) {
 
       const result: HistoryPoint[] = Object.entries(byMonth)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([month, v]) => ({ month, ...v }))
+        .map(([month, v]) => {
+          const [y, m] = month.split('-')
+          const label = new Date(Number(y), Number(m) - 1).toLocaleDateString('ar-SA', { month: 'short', year: '2-digit' })
+          return { month, label, ...v }
+        })
 
       setPoints(result)
       setLoading(false)
@@ -100,11 +100,6 @@ export default function RecipePriceHistory({ sku, brand }: Props) {
 
   const hasApp = points.some(p => p.app != null)
 
-  const labels = points.map(p => {
-    const [y, m] = p.month.split('-')
-    return new Date(Number(y), Number(m) - 1).toLocaleDateString('ar-SA', { month: 'short', year: '2-digit' })
-  })
-
   const legendItems = [
     { label: 'Cost IN',  color: C.primary },
     { label: 'Cost OUT', color: C.accent  },
@@ -133,75 +128,60 @@ export default function RecipePriceHistory({ sku, brand }: Props) {
       </div>
 
       {/* Chart */}
-      <div style={{ height: 180, position: 'relative' }}>
-        <Line
-          data={{
-            labels,
-            datasets: [
-              {
-                label: 'Cost IN',
-                data: points.map(p => p.di),
-                borderColor: C.primary,
-                backgroundColor: `${C.primary}10`,
-                borderWidth: 2,
-                pointRadius: 3,
-                pointBackgroundColor: C.primary,
-                tension: 0.4,
-                fill: false,
-              },
-              {
-                label: 'Cost OUT',
-                data: points.map(p => p.do_),
-                borderColor: C.accent,
-                backgroundColor: `${C.accent}10`,
-                borderWidth: 2,
-                pointRadius: 3,
-                pointBackgroundColor: C.accent,
-                tension: 0.4,
-                fill: false,
-              },
-              ...(hasApp ? [{
-                label: 'Cost AGG',
-                data: points.map(p => p.app),
-                borderColor: C.green,
-                backgroundColor: `${C.green}10`,
-                borderWidth: 2,
-                pointRadius: 3,
-                pointBackgroundColor: C.green,
-                tension: 0.4,
-                fill: false,
-              }] : []),
-            ],
-          }}
-          options={{
-            responsive: true,
-            maintainAspectRatio: false,
-            interaction: { mode: 'index', intersect: false },
-            plugins: {
-              legend: { display: false },
-              tooltip: {
-                callbacks: {
-                  label: ctx => ` ${ctx.dataset.label}: ${(ctx.parsed.y as number).toFixed(1)}%`,
-                },
-              },
-            },
-            scales: {
-              x: {
-                grid: { color: 'rgba(0,0,0,0.04)' },
-                ticks: { font: { size: 11, family: MONO }, color: C.gray400 },
-              },
-              y: {
-                beginAtZero: false,
-                grid: { color: 'rgba(0,0,0,0.05)' },
-                ticks: {
-                  font: { size: 11, family: MONO },
-                  color: C.gray400,
-                  callback: v => `${v}%`,
-                },
-              },
-            },
-          }}
-        />
+      <div style={{ height: 180 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={points} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
+            <XAxis
+              dataKey="label"
+              tick={{ fontSize: 11, fontFamily: MONO, fill: C.gray400 }}
+              axisLine={false}
+              tickLine={false}
+            />
+            <YAxis
+              tickFormatter={v => `${v}%`}
+              tick={{ fontSize: 11, fontFamily: MONO, fill: C.gray400 }}
+              axisLine={false}
+              tickLine={false}
+              width={40}
+            />
+            <Tooltip
+              formatter={(value, name) => {
+              const v = typeof value === 'number' ? value : 0
+              return [`${v.toFixed(1)}%`, name]
+            }}
+            />
+            <Line
+              type="monotone"
+              dataKey="di"
+              name="Cost IN"
+              stroke={C.primary}
+              strokeWidth={2}
+              dot={{ r: 3, fill: C.primary }}
+              connectNulls
+            />
+            <Line
+              type="monotone"
+              dataKey="do_"
+              name="Cost OUT"
+              stroke={C.accent}
+              strokeWidth={2}
+              dot={{ r: 3, fill: C.accent }}
+              connectNulls
+            />
+            {hasApp && (
+              <Line
+                type="monotone"
+                dataKey="app"
+                name="Cost AGG"
+                stroke={C.green}
+                strokeWidth={2}
+                dot={{ r: 3, fill: C.green }}
+                connectNulls
+              />
+            )}
+          </LineChart>
+        </ResponsiveContainer>
       </div>
     </div>
   )

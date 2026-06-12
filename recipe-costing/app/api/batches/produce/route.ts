@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireBrandAccess, isAuthError } from '@/lib/auth'
+import { requireModulePermission, isAuthError } from '@/lib/auth'
 import { executeBatchProduce } from '@/lib/produceBatch'
 
 const ActualSchema = z.object({
@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
   }
 
-  const user = await requireBrandAccess(parsed.data.brand_id)
+  const user = await requireModulePermission(parsed.data.brand_id, 'production', 'create')
   if (isAuthError(user)) return user
 
   const { brand_id, batch_sku, qty_portions, dry_run, note: userNote, performed_by, actuals } = parsed.data

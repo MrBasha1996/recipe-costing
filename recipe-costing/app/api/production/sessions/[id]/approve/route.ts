@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireBrandAccess, isAuthError } from '@/lib/auth'
+import { requireModulePermission, isAuthError } from '@/lib/auth'
 
 // POST /api/production/sessions/[id]/approve?brand_id=X
 export async function POST(
@@ -12,7 +12,7 @@ export async function POST(
   const brand_id = searchParams.get('brand_id') ?? ''
   if (!brand_id) return NextResponse.json({ error: 'brand_id مطلوب' }, { status: 400 })
 
-  const user = await requireBrandAccess(brand_id)
+  const user = await requireModulePermission(brand_id, 'production', 'approve')
   if (isAuthError(user)) return user
 
   const admin = createAdminClient()

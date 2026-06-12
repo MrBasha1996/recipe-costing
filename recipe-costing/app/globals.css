@@ -132,6 +132,12 @@ body {
   transform: translateY(-2px);
 }
 
+/* ── Dashboard shell layout ──────────────────────────────── */
+@media (min-width: 1024px) {
+  .ds-sidebar { transform: translateX(0) !important; }
+  .ds-main    { margin-right: 260px; }
+}
+
 /* ── FC status colors (shared across pages) ─────────────── */
 .fc-ok    { color: #059669; }
 .fc-warn  { color: #d97706; }

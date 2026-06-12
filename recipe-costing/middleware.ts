@@ -1,10 +1,42 @@
 import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
-// Valid brands are fetched from DB per-request (table is small, changes rarely)
+// Module-level TTL cache — survives across requests in the same process
+const _brandsCache: { data: string[]; exp: number } = { data: [], exp: 0 }
+const _permsCache  = new Map<string, { data: any[]; exp: number }>()
+const _profileCache = new Map<string, { data: any; exp: number }>()
+const BRANDS_TTL  = 60_000   // 1 min
+const PERMS_TTL   = 60_000   // 1 min
+const PROFILE_TTL = 30_000   // 30 sec
+
 async function getValidBrands(supabase: any): Promise<string[]> {
+  if (Date.now() < _brandsCache.exp) return _brandsCache.data
   const { data } = await supabase.from('brands').select('id')
-  return (data ?? []).map((b: any) => b.id as string)
+  _brandsCache.data = (data ?? []).map((b: any) => b.id as string)
+  _brandsCache.exp  = Date.now() + BRANDS_TTL
+  return _brandsCache.data
+}
+
+async function getUserProfile(supabase: any, userId: string): Promise<any> {
+  const cached = _profileCache.get(userId)
+  if (cached && Date.now() < cached.exp) return cached.data
+  const { data } = await (supabase.from('user_profiles') as any)
+    .select('role_id, brand_access, roles(is_super_admin)')
+    .eq('id', userId)
+    .single()
+  _profileCache.set(userId, { data, exp: Date.now() + PROFILE_TTL })
+  return data
+}
+
+async function getRolePermissions(supabase: any, roleId: string): Promise<any[]> {
+  const cached = _permsCache.get(roleId)
+  if (cached && Date.now() < cached.exp) return cached.data
+  const { data } = await (supabase.from('role_permissions') as any)
+    .select('can_view, modules!inner(code)')
+    .eq('role_id', roleId)
+  const result = data ?? []
+  _permsCache.set(roleId, { data: result, exp: Date.now() + PERMS_TTL })
+  return result
 }
 
 // Map path segment → module code for RBAC check
@@ -51,7 +83,10 @@ export async function middleware(request: NextRequest) {
     },
   )
 
-  const { data: { user } } = await supabase.auth.getUser()
+  // getSession() reads the JWT from the cookie locally — no network round-trip.
+  // Security boundaries are enforced in layout (getUser) and API routes (requireModulePermission).
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user ?? null
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith('/login')) {
@@ -73,10 +108,7 @@ export async function middleware(request: NextRequest) {
   const validBrands = await getValidBrands(supabase)
   if (!validBrands.includes(brandInUrl)) return supabaseResponse
 
-  const { data: profile } = await (supabase.from('user_profiles') as any)
-    .select('role_id, brand_access, roles(is_super_admin)')
-    .eq('id', user.id)
-    .single()
+  const profile = await getUserProfile(supabase, user.id)
 
   if (!profile) {
     return NextResponse.redirect(new URL('/login', request.url))
@@ -99,11 +131,9 @@ export async function middleware(request: NextRequest) {
   const moduleCode = pageSegment ? PATH_TO_MODULE[pageSegment] : null
   if (!moduleCode) return supabaseResponse
 
-  const { data: perms } = await (supabase.from('role_permissions') as any)
-    .select('can_view, modules!inner(code)')
-    .eq('role_id', profile.role_id)
+  const perms = await getRolePermissions(supabase, profile.role_id)
 
-  const modulePerm = (perms as any[])?.find((p: any) => p.modules?.code === moduleCode)
+  const modulePerm = perms?.find((p: any) => p.modules?.code === moduleCode)
 
   if (!modulePerm?.can_view) {
     return NextResponse.redirect(new URL(`/${brandInUrl}/costing`, request.url))

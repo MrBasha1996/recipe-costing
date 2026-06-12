@@ -160,10 +160,102 @@ export async function POST(request: NextRequest) {
       .upsert(stockUpserts, { onConflict: 'brand_id,ing_sku' })
   }
 
+  // ── 6. Cascade: recalculate recipe costs for affected recipes ────────
+  let recipesUpdated = 0
+  if (ingredientUpdates.length > 0) {
+    const changedSkus = ingredientUpdates.map(u => u.sku)
+
+    // Find recipe_ids that use any of the changed ingredients
+    const { data: affected } = await (admin.from('recipe_ingredients') as any)
+      .select('recipe_id')
+      .eq('brand_id', brand_id)
+      .in('ing_sku', changedSkus)
+
+    const recipeIds = [...new Set((affected || []).map((r: any) => r.recipe_id as string))]
+
+    if (recipeIds.length > 0) {
+      // Update unit_cost snapshots in recipe_ingredients for changed SKUs
+      for (const { sku, newCost } of ingredientUpdates) {
+        await (admin.from('recipe_ingredients') as any)
+          .update({ unit_cost: newCost })
+          .eq('brand_id', brand_id)
+          .eq('ing_sku', sku)
+          .in('recipe_id', recipeIds)
+      }
+
+      // Fetch all recipe_ingredients (with updated snapshots) for affected recipes
+      const { data: allRi } = await (admin.from('recipe_ingredients') as any)
+        .select('recipe_id, qty, yield_pct, unit_cost, service_type')
+        .eq('brand_id', brand_id)
+        .in('recipe_id', recipeIds)
+
+      // Fetch recipe details needed for FC% and margin
+      const { data: recipeDetails } = await (admin.from('recipes') as any)
+        .select('id, yield_portions, sell_price, app_price')
+        .eq('brand_id', brand_id)
+        .eq('is_active', true)
+        .in('id', recipeIds)
+
+      // Group ingredients by recipe_id
+      const riByRecipe = new Map<string, any[]>()
+      for (const row of (allRi || []) as any[]) {
+        if (!riByRecipe.has(row.recipe_id)) riByRecipe.set(row.recipe_id, [])
+        riByRecipe.get(row.recipe_id)!.push(row)
+      }
+
+      for (const recipe of (recipeDetails || []) as any[]) {
+        const rows = riByRecipe.get(recipe.id) ?? []
+        const calcCost = (rs: any[]) => rs.reduce((sum: number, r: any) => {
+          const yp = r.yield_pct > 0 ? r.yield_pct : 100
+          return sum + (r.qty / (yp / 100)) * (r.unit_cost ?? 0)
+        }, 0)
+
+        // Main: food rows (service_type = 'both' or 'dine_in')
+        const mainRows = rows.filter((r: any) => r.service_type !== 'dine_out')
+        const mainCost = calcCost(mainRows)
+
+        // Dine-out: food rows + packaging rows
+        const packagingRows = rows.filter((r: any) => r.service_type === 'dine_out')
+        const dineOutCost = mainCost + calcCost(packagingRows)
+
+        const portions     = Math.max(recipe.yield_portions ?? 1, 1)
+        const perPortion   = mainCost / portions
+        const sellExVat    = (recipe.sell_price ?? 0) / 1.15
+        const appExVat     = recipe.app_price != null ? recipe.app_price / 1.15 : null
+        const fcPct        = sellExVat > 0 ? (perPortion / sellExVat) * 100 : 0
+        const margin       = sellExVat - perPortion
+        const marginApp    = appExVat != null ? appExVat - perPortion : null
+
+        const dinePerP     = dineOutCost / portions
+        const dineOutFcPct = appExVat != null && appExVat > 0 ? (dinePerP / appExVat) * 100 : null
+        const dineOutMargin = appExVat != null ? appExVat - dinePerP : null
+
+        const R = (v: number) => Math.round(v * 10000) / 10000
+
+        await (admin.from('recipes') as any)
+          .update({
+            total_cost:    R(mainCost),
+            food_cost_pct: Math.round(fcPct * 100) / 100,
+            margin:        R(margin),
+            ...(marginApp != null ? { margin_app: R(marginApp) } : {}),
+            ...(packagingRows.length > 0 ? {
+              dine_out_total_cost:    R(dineOutCost),
+              dine_out_food_cost_pct: dineOutFcPct != null ? Math.round(dineOutFcPct * 100) / 100 : null,
+              dine_out_margin:        dineOutMargin != null ? R(dineOutMargin) : null,
+            } : {}),
+          })
+          .eq('id', recipe.id)
+
+        recipesUpdated++
+      }
+    }
+  }
+
   return NextResponse.json({
     ok: true,
     updated: ingredientUpdates.length,
     stock_updated: stockUpserts.length,
     price_history: priceHistoryRows.length,
+    recipes_updated: recipesUpdated,
   })
 }

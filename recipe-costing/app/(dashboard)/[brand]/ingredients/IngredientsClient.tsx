@@ -31,11 +31,29 @@ export default function IngredientsClient({ initialIngredients, initialConversio
   const [parseError, setParseError] = useState<string | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [showUnlinked, setShowUnlinked] = useState(false)
+  const [linkedSkus, setLinkedSkus] = useState<Set<string> | null>(null)
+  const [loadingUnlinked, setLoadingUnlinked] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const dataFileRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => { setIngredients(initialIngredients) }, [initialIngredients])
   useEffect(() => { setConversions(initialConversions) }, [initialConversions])
+
+  async function toggleUnlinked() {
+    if (showUnlinked) { setShowUnlinked(false); return }
+    if (linkedSkus === null) {
+      setLoadingUnlinked(true)
+      const supabase = createClient()
+      const { data } = await (supabase.from('recipe_items') as any)
+        .select('ing_sku')
+        .eq('brand_id', brand)
+      const skuSet = new Set<string>((data || []).map((r: any) => r.ing_sku as string))
+      setLinkedSkus(skuSet)
+      setLoadingUnlinked(false)
+    }
+    setShowUnlinked(true)
+  }
 
   const convMap = useMemo(() => {
     const m = new Map<string, UnitConversion>()
@@ -47,7 +65,8 @@ export default function IngredientsClient({ initialIngredients, initialConversio
   const filtered = ingredients.filter(i => {
     const matchSearch = i.name.toLowerCase().includes(search.toLowerCase()) || i.sku.includes(search)
     const matchCat = categoryFilter === 'all' || i.category === categoryFilter
-    return matchSearch && matchCat
+    const matchUnlinked = !showUnlinked || (linkedSkus !== null && !linkedSkus.has(i.sku))
+    return matchSearch && matchCat && matchUnlinked
   })
 
   function handleEdit(i: Ingredient) { setEditIngredient(i); setShowForm(true) }
@@ -83,7 +102,10 @@ export default function IngredientsClient({ initialIngredients, initialConversio
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-gray-900">المواد الخام</h1>
-          <p className="text-gray-500 text-sm mt-0.5">{filtered.length} مكوّن</p>
+          <p className="text-gray-500 text-sm mt-0.5">
+            {filtered.length} مكوّن
+            {showUnlinked && <span className="mr-2 text-orange-600 font-medium"> — غير مرتبطة بوصفات</span>}
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <input
@@ -102,6 +124,15 @@ export default function IngredientsClient({ initialIngredients, initialConversio
               <option key={c} value={c}>{c === 'all' ? 'كل الفئات' : c}</option>
             ))}
           </select>
+
+          <button
+            onClick={toggleUnlinked}
+            disabled={loadingUnlinked}
+            className={`text-sm px-3 py-2 rounded-lg border transition-colors ${showUnlinked ? 'bg-orange-50 border-orange-300 text-orange-700 font-medium' : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-50'}`}
+            title="عرض الأصناف غير المرتبطة بأي وصفة"
+          >
+            {loadingUnlinked ? '...' : showUnlinked ? '✕ إلغاء الفلتر' : '⚠ غير مرتبطة بوصفات'}
+          </button>
 
           {isAccountant() && (
             <>

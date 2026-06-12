@@ -8,9 +8,9 @@ export async function getValidBrands(): Promise<string[]> {
   return (data ?? []).map((b: any) => b.id as string)
 }
 
-/** Validate a brand param from the URL route segment against the DB. Returns 'bb' as fallback. */
+/** Validate a brand param from the URL route segment against the DB. Returns first valid brand as fallback. */
 export async function brandFromParam(param: string | undefined): Promise<BrandId> {
-  if (!param) return 'bb'
   const valid = await getValidBrands()
-  return valid.includes(param) ? param : (valid[0] ?? 'bb')
+  if (param && valid.includes(param)) return param as BrandId
+  return (valid[0] ?? '') as BrandId
 }

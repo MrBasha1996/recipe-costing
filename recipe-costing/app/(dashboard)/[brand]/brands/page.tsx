@@ -15,9 +15,21 @@ interface FormState {
   name_ar: string
   fc_target_low: string
   fc_target_high: string
+  logo_url: string
+  primary_color: string
+  delivery_commission_pct: string
 }
 
-const EMPTY_FORM: FormState = { id: '', name: '', name_ar: '', fc_target_low: '35', fc_target_high: '45' }
+const EMPTY_FORM: FormState = {
+  id: '',
+  name: '',
+  name_ar: '',
+  fc_target_low: '35',
+  fc_target_high: '45',
+  logo_url: '',
+  primary_color: '#3b82f6',
+  delivery_commission_pct: '0',
+}
 
 export default function BrandsPage() {
   const [brands, setBrands] = useState<BrandRow[]>([])
@@ -38,7 +50,7 @@ export default function BrandsPage() {
     setLoading(true)
     const supabase = createClient()
     const { data: brandData } = await (supabase.from('brands') as any)
-      .select('id, name, name_ar, fc_target_low, fc_target_high')
+      .select('id, name, name_ar, fc_target_low, fc_target_high, logo_url, primary_color, delivery_commission_pct')
       .order('id')
 
     const { data: userData } = await (supabase.from('user_profiles') as any)
@@ -75,6 +87,9 @@ export default function BrandsPage() {
       name_ar: b.name_ar,
       fc_target_low: String(b.fc_target_low ?? 35),
       fc_target_high: String(b.fc_target_high ?? 45),
+      logo_url: b.logo_url ?? '',
+      primary_color: b.primary_color ?? '#3b82f6',
+      delivery_commission_pct: String(b.delivery_commission_pct ?? 0),
     })
     setError('')
     setShowForm(true)
@@ -84,13 +99,28 @@ export default function BrandsPage() {
     setError('')
     const fcLow  = parseFloat(form.fc_target_low)
     const fcHigh = parseFloat(form.fc_target_high)
+    const commission = parseFloat(form.delivery_commission_pct)
     if (!form.id.trim() || !form.name.trim() || !form.name_ar.trim()) {
-      setError('جميع الحقول مطلوبة')
+      setError('جميع الحقول الأساسية مطلوبة')
       return
     }
     if (isNaN(fcLow) || isNaN(fcHigh) || fcLow >= fcHigh) {
       setError('أهداف FC% غير صحيحة')
       return
+    }
+    if (isNaN(commission) || commission < 0 || commission > 100) {
+      setError('نسبة العمولة يجب أن تكون بين 0 و100')
+      return
+    }
+
+    const payload: Record<string, any> = {
+      name: form.name.trim(),
+      name_ar: form.name_ar.trim(),
+      fc_target_low: fcLow,
+      fc_target_high: fcHigh,
+      primary_color: form.primary_color,
+      delivery_commission_pct: commission,
+      logo_url: form.logo_url.trim() || null,
     }
 
     setSaving(true)
@@ -98,12 +128,12 @@ export default function BrandsPage() {
     try {
       if (editBrand) {
         const { error: err } = await (supabase.from('brands') as any)
-          .update({ name: form.name.trim(), name_ar: form.name_ar.trim(), fc_target_low: fcLow, fc_target_high: fcHigh })
+          .update(payload)
           .eq('id', editBrand.id)
         if (err) throw err
       } else {
         const { error: err } = await (supabase.from('brands') as any)
-          .insert({ id: form.id.trim().toLowerCase(), name: form.name.trim(), name_ar: form.name_ar.trim(), fc_target_low: fcLow, fc_target_high: fcHigh })
+          .insert({ id: form.id.trim().toLowerCase(), ...payload })
         if (err) throw err
       }
       setShowForm(false)
@@ -128,8 +158,10 @@ export default function BrandsPage() {
     setDeletingId(null)
   }
 
+  const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500'
+
   return (
-    <div className="space-y-5 max-w-4xl">
+    <div className="space-y-5 max-w-5xl">
       {/* Header */}
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -156,7 +188,9 @@ export default function BrandsPage() {
               <tr className="border-b border-gray-200 text-xs text-gray-500 bg-gray-50">
                 <th className="text-right px-4 py-3 font-medium">البراند</th>
                 <th className="text-center px-4 py-3 font-medium">الرمز</th>
+                <th className="text-center px-4 py-3 font-medium">اللون</th>
                 <th className="text-center px-4 py-3 font-medium">هدف FC%</th>
+                <th className="text-center px-4 py-3 font-medium">عمولة التوصيل</th>
                 <th className="text-center px-4 py-3 font-medium">المستخدمون</th>
                 <th className="text-center px-4 py-3 font-medium">إجراءات</th>
               </tr>
@@ -165,14 +199,34 @@ export default function BrandsPage() {
               {brands.map(b => (
                 <tr key={b.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{b.name_ar}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">{b.name}</div>
+                    <div className="flex items-center gap-3">
+                      {b.logo_url ? (
+                        <img src={b.logo_url} alt={b.name_ar} className="w-8 h-8 rounded-lg object-contain border border-gray-200 bg-gray-50" />
+                      ) : (
+                        <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold" style={{ backgroundColor: b.primary_color ?? '#3b82f6' }}>
+                          {b.name_ar.charAt(0)}
+                        </div>
+                      )}
+                      <div>
+                        <div className="font-medium text-gray-900">{b.name_ar}</div>
+                        <div className="text-xs text-gray-500 mt-0.5">{b.name}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className="text-xs font-mono bg-gray-100 px-2 py-1 rounded">{b.id}</span>
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    <div className="flex items-center justify-center gap-1.5">
+                      <div className="w-4 h-4 rounded border border-gray-200" style={{ backgroundColor: b.primary_color ?? '#3b82f6' }} />
+                      <span className="text-xs font-mono text-gray-500">{b.primary_color ?? '#3b82f6'}</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-center text-xs text-gray-600">
                     {b.fc_target_low ?? 35}% – {b.fc_target_high ?? 45}%
+                  </td>
+                  <td className="px-4 py-3 text-center text-xs text-gray-600">
+                    {b.delivery_commission_pct ?? 0}%
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className="text-xs font-medium text-gray-700">{b.user_count ?? 0}</span>
@@ -202,7 +256,7 @@ export default function BrandsPage() {
               ))}
               {brands.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
+                  <td colSpan={7} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
                 </tr>
               )}
             </tbody>
@@ -213,7 +267,7 @@ export default function BrandsPage() {
       {/* Modal */}
       {showForm && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
             <h2 className="text-lg font-bold text-gray-900 mb-5">
               {editBrand ? `تعديل براند — ${editBrand.name_ar}` : 'إضافة براند جديد'}
             </h2>
@@ -226,30 +280,80 @@ export default function BrandsPage() {
                     value={form.id}
                     onChange={e => setForm(f => ({ ...f, id: e.target.value }))}
                     placeholder="مثال: ti, bb, xx"
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-blue-500"
+                    className={`${inputCls} font-mono`}
                   />
                 </div>
               )}
-              <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">الاسم العربي</label>
-                <input
-                  value={form.name_ar}
-                  onChange={e => setForm(f => ({ ...f, name_ar: e.target.value }))}
-                  placeholder="باب البلد"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
-                  dir="rtl"
-                />
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">الاسم العربي</label>
+                  <input
+                    value={form.name_ar}
+                    onChange={e => setForm(f => ({ ...f, name_ar: e.target.value }))}
+                    placeholder="باب البلد"
+                    className={inputCls}
+                    dir="rtl"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">الاسم الإنجليزي</label>
+                  <input
+                    value={form.name}
+                    onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+                    placeholder="Bab Al Balad"
+                    className={inputCls}
+                    dir="ltr"
+                  />
+                </div>
               </div>
+
+              {/* Logo & Color */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">اللون الأساسي</label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="color"
+                      value={form.primary_color}
+                      onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
+                      className="w-10 h-9 rounded border border-gray-300 cursor-pointer p-0.5"
+                    />
+                    <input
+                      value={form.primary_color}
+                      onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
+                      placeholder="#3b82f6"
+                      className={`${inputCls} font-mono flex-1`}
+                      dir="ltr"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">معاينة</label>
+                  <div className="h-9 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ backgroundColor: form.primary_color }}>
+                    {form.name_ar || form.id || 'براند'}
+                  </div>
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-medium text-gray-700 mb-1">الاسم الإنجليزي</label>
+                <label className="block text-xs font-medium text-gray-700 mb-1">رابط الشعار (اختياري)</label>
                 <input
-                  value={form.name}
-                  onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                  placeholder="Bab Al Balad"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                  value={form.logo_url}
+                  onChange={e => setForm(f => ({ ...f, logo_url: e.target.value }))}
+                  placeholder="https://..."
+                  className={inputCls}
                   dir="ltr"
                 />
+                {form.logo_url && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <img src={form.logo_url} alt="معاينة" className="w-10 h-10 object-contain rounded-lg border border-gray-200 bg-gray-50" onError={e => (e.currentTarget.style.display = 'none')} />
+                    <span className="text-xs text-gray-400">معاينة الشعار</span>
+                  </div>
+                )}
               </div>
+
+              {/* FC Targets */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-medium text-gray-700 mb-1">هدف FC% الأدنى</label>
@@ -257,7 +361,7 @@ export default function BrandsPage() {
                     type="number"
                     value={form.fc_target_low}
                     onChange={e => setForm(f => ({ ...f, fc_target_low: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                    className={inputCls}
                   />
                 </div>
                 <div>
@@ -266,9 +370,24 @@ export default function BrandsPage() {
                     type="number"
                     value={form.fc_target_high}
                     onChange={e => setForm(f => ({ ...f, fc_target_high: e.target.value }))}
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                    className={inputCls}
                   />
                 </div>
+              </div>
+
+              {/* Delivery Commission */}
+              <div>
+                <label className="block text-xs font-medium text-gray-700 mb-1">عمولة منصات التوصيل %</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  value={form.delivery_commission_pct}
+                  onChange={e => setForm(f => ({ ...f, delivery_commission_pct: e.target.value }))}
+                  className={inputCls}
+                />
+                <p className="text-xs text-gray-400 mt-1">تُحسب تلقائياً من الإيراد في تقرير P&L</p>
               </div>
             </div>
 

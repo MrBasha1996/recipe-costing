@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
 import BrandSelectorOverlay from '@/components/BrandSelectorOverlay'
-import type { UserProfile, BrandId } from '@/types'
+import type { UserProfile, BrandId, PermissionsMap } from '@/types'
 
 const NAV_BASE = [
   { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   path: '/dashboard' },
@@ -45,10 +45,16 @@ const ALERT_COLOR: Record<AlertType, string> = { empty: 'text-red-600', low: 'te
 export default function DashboardShell({
   profile,
   brand,
+  initialPermissions,
+  isSuperAdmin,
+  roleName: roleNameProp,
   children,
 }: {
   profile: UserProfile
   brand: BrandId
+  initialPermissions: PermissionsMap
+  isSuperAdmin: boolean
+  roleName: string | null
   children: React.ReactNode
 }) {
   const router = useRouter()
@@ -68,11 +74,15 @@ export default function DashboardShell({
   useEffect(() => {
     setProfile(profile)
     setMounted(true)
+    // Hydrate store from server-fetched data — no client-side round-trips
+    usePermissionsStore.getState().initFromServer(initialPermissions, isSuperAdmin, roleNameProp)
+    // Subscribe to realtime changes for live permission updates
     if (profile?.id) {
       const supabase = createClient()
-      usePermissionsStore.getState().loadPermissions(profile.id, supabase)
+      usePermissionsStore.getState().subscribeToChanges(profile.id, supabase)
     }
-  }, [profile, setProfile])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // تحميل الإنذارات وتجديدها كل دقيقتين
   useEffect(() => {
@@ -106,6 +116,7 @@ export default function DashboardShell({
     const { data: stocks } = await (supabase.from('stock_items') as any)
       .select('ing_sku, ing_name, current_qty, min_qty, expiry_date')
       .eq('brand_id', brandId)
+      .or('min_qty.gt.0,expiry_date.not.is.null')
     if (!stocks?.length) return
     const newAlerts: Alert[] = []
     for (const s of stocks as any[]) {
@@ -123,7 +134,9 @@ export default function DashboardShell({
     setAlerts(newAlerts)
   }
 
-  const { hasPermission, loaded: permLoaded, roleName } = usePermissionsStore()
+  const hasPermission = usePermissionsStore(s => s.hasPermission)
+  const permLoaded    = usePermissionsStore(s => s.loaded)
+  const roleName      = usePermissionsStore(s => s.roleName)
 
   const visibleNav = permLoaded
     ? NAV_ITEMS.filter(n => hasPermission(n.key, 'view'))
@@ -170,13 +183,6 @@ export default function DashboardShell({
         onClose={() => setShowSelector(false)}
         canClose={true}
       />
-
-      <style>{`
-        @media (min-width: 1024px) {
-          .ds-sidebar { transform: translateX(0) !important; }
-          .ds-main    { margin-right: ${SIDEBAR_W}px; }
-        }
-      `}</style>
 
       {/* Mobile overlay */}
       {mobileOpen && (

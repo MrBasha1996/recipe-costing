@@ -17,6 +17,7 @@ type Tab = 'stock' | 'add' | 'history' | 'stocktake' | 'availability' | 'aging' 
 interface StocktakeSession {
   id: string; session_date: string; notes: string | null
   status: 'open' | 'finalized'; created_at: string; finalized_at: string | null
+  approved_by: string | null; approved_at: string | null
 }
 
 interface StocktakeItem {
@@ -408,6 +409,22 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
 
 // ── Tab 3: History ────────────────────────────────────────────────
 
+function movementSource(m: StockMovement): { label: string; cls: string } | null {
+  if (m.production_session_id) {
+    return { label: `إنتاج #${m.production_session_id.slice(-6).toUpperCase()}`, cls: 'bg-purple-50 text-purple-700' }
+  }
+  if (m.note?.startsWith('شراء') || m.note?.startsWith('مشتريات') || m.note?.includes('purchase')) {
+    return { label: 'مشتريات', cls: 'bg-blue-50 text-blue-700' }
+  }
+  if (m.note?.startsWith('مبيعات') || m.note?.includes('explode') || m.note?.includes('sales')) {
+    return { label: 'مبيعات', cls: 'bg-green-50 text-green-700' }
+  }
+  if (m.note?.startsWith('جرد') || m.note?.includes('stocktake')) {
+    return { label: 'جرد', cls: 'bg-amber-50 text-amber-700' }
+  }
+  return null
+}
+
 function HistoryTab({ movements }: { movements: StockMovement[] }) {
   const [typeFilter, setTypeFilter] = useState<MovementType | 'all'>('all')
   const [search, setSearch] = useState('')
@@ -443,26 +460,36 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
                 <th className="px-4 py-3 text-xs text-gray-500 font-medium">الصنف</th>
                 <th className="px-4 py-3 text-xs text-gray-500 font-medium text-center">النوع</th>
                 <th className="px-4 py-3 text-xs text-gray-500 font-medium text-center">الكمية</th>
+                <th className="px-4 py-3 text-xs text-gray-500 font-medium text-center">المصدر</th>
                 <th className="px-4 py-3 text-xs text-gray-500 font-medium">ملاحظة</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map(m => (
-                <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
-                  <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(m.created_at).toLocaleDateString('ar-SA')}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{m.ing_name}</div>
-                    <div className="text-xs text-gray-400 font-mono">{m.ing_sku}</div>
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`text-xs font-semibold ${movementColor(m.movement_type)}`}>{movementLabel(m.movement_type)}</span>
-                  </td>
-                  <td className="px-4 py-3 text-center font-mono text-gray-700">
-                    {m.movement_type === 'out' || m.movement_type === 'waste' ? '-' : '+'}{m.qty}
-                  </td>
-                  <td className="px-4 py-3 text-xs text-gray-500">{m.note ?? '—'}</td>
-                </tr>
-              ))}
+              {filtered.map(m => {
+                const src = movementSource(m)
+                return (
+                  <tr key={m.id} className="border-b border-gray-100 hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 text-xs text-gray-500 whitespace-nowrap">{new Date(m.created_at).toLocaleDateString('ar-SA')}</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{m.ing_name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{m.ing_sku}</div>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-xs font-semibold ${movementColor(m.movement_type)}`}>{movementLabel(m.movement_type)}</span>
+                    </td>
+                    <td className="px-4 py-3 text-center font-mono text-gray-700">
+                      {m.movement_type === 'out' || m.movement_type === 'waste' ? '-' : '+'}{m.qty}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {src
+                        ? <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${src.cls}`}>{src.label}</span>
+                        : <span className="text-gray-300 text-xs">—</span>
+                      }
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500">{m.note ?? '—'}</td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
@@ -512,7 +539,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     const { data: session, error } = await (supabase.from('stocktake_sessions') as any)
       .insert({ brand_id: brand, session_date: newDate, notes: newNotes || null, created_by: user?.id })
       .select().single()
-    if (error) { setSaving(false); return }
+    if (error) { setSaving(false); alert(`فشل إنشاء جلسة الجرد: ${error.message}`); return }
     const [{ data: ings }, { data: batchRecipes }] = await Promise.all([
       (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
       (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true),
@@ -566,7 +593,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
       }, { onConflict: 'brand_id,ing_sku' })
       await (supabase.from('stock_movements') as any).insert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        movement_type: 'adjustment', qty: Math.abs(variance), note, performed_by: user?.id ?? null,
+        movement_type: 'adjustment', qty: variance, note, performed_by: user?.id ?? null,
       })
     }
     await (supabase.from('stocktake_sessions') as any)
@@ -575,6 +602,19 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     await loadSessions()
     setMsg({ ok: true, text: 'تم إنهاء الجرد وتحديث المخزون ✓' })
     setTimeout(() => setMsg(null), 4000)
+  }
+
+  async function handleApproveSession(sessionId: string) {
+    if (!confirm('اعتماد هذا الجرد؟ لن يمكن التراجع.')) return
+    const res = await fetch(`/api/stocktake/${sessionId}/approve`, { method: 'POST' })
+    if (res.ok) {
+      await loadSessions()
+      setMsg({ ok: true, text: 'تم اعتماد الجرد ✓' })
+      setTimeout(() => setMsg(null), 3000)
+    } else {
+      const d = await res.json()
+      setMsg({ ok: false, text: d.error ?? 'فشل الاعتماد' })
+    }
   }
 
   if (activeSession) {
@@ -717,15 +757,28 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
                     <td className="px-4 py-3 font-medium text-gray-900">{new Date(s.session_date).toLocaleDateString('ar-SA')}</td>
                     <td className="px-4 py-3 text-xs text-gray-500">{s.notes ?? '—'}</td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${s.status === 'finalized' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                        {s.status === 'finalized' ? 'منتهي' : 'مفتوح'}
-                      </span>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${s.status === 'finalized' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                          {s.status === 'finalized' ? 'منتهي' : 'مفتوح'}
+                        </span>
+                        {s.approved_at && (
+                          <span className="text-[10px] text-purple-600 font-medium">معتمد ✓</span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <button onClick={async () => { setActiveSession(s); await loadSessionItems(s.id) }}
-                        className="text-xs text-blue-600 hover:text-blue-800 font-medium">
-                        {s.status === 'finalized' ? 'عرض' : 'متابعة'}
-                      </button>
+                      <div className="flex items-center justify-center gap-2">
+                        <button onClick={async () => { setActiveSession(s); await loadSessionItems(s.id) }}
+                          className="text-xs text-blue-600 hover:text-blue-800 font-medium">
+                          {s.status === 'finalized' ? 'عرض' : 'متابعة'}
+                        </button>
+                        {s.status === 'finalized' && !s.approved_at && (
+                          <button onClick={() => handleApproveSession(s.id)}
+                            className="text-xs px-2 py-1 bg-purple-50 hover:bg-purple-100 text-purple-700 rounded-lg font-medium transition-colors">
+                            اعتماد
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}

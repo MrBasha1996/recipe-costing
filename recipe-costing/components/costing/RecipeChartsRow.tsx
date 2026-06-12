@@ -1,12 +1,9 @@
 'use client'
 
-import { Doughnut } from 'react-chartjs-2'
-import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import type { RecipeRowDraft } from '@/types'
 import { calcRowCost } from '@/lib/calculations'
 import { C, MONO, PALETTE } from './theme'
-
-ChartJS.register(ArcElement, Tooltip, Legend)
 
 interface Props {
   foodRows: RecipeRowDraft[]
@@ -51,35 +48,32 @@ export default function RecipeChartsRow({ foodRows, diPackaging, doPackaging }: 
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 24, alignItems: 'center' }}>
             <div style={{ position: 'relative', height: 160 }}>
-              <Doughnut
-                data={{
-                  labels: summaryItems.map(x => x.label),
-                  datasets: [{
-                    data: summaryItems.map(x => x.value),
-                    backgroundColor: summaryItems.map(x => x.color),
-                    borderWidth: 2,
-                    borderColor: '#fff',
-                    hoverOffset: 6,
-                  }],
-                }}
-                options={{
-                  responsive: true,
-                  maintainAspectRatio: false,
-                  cutout: '60%',
-                  plugins: {
-                    legend: { display: false },
-                    tooltip: {
-                      callbacks: {
-                        label: ctx => {
-                          const val = ctx.parsed as number
-                          const pct = summaryTotal > 0 ? ((val / summaryTotal) * 100).toFixed(1) : '0'
-                          return ` ${ctx.label}: ${val.toFixed(3)} ر.س (${pct}%)`
-                        },
-                      },
-                    },
-                  },
-                }}
-              />
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={summaryItems}
+                    dataKey="value"
+                    nameKey="label"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={70}
+                    strokeWidth={2}
+                    stroke="#fff"
+                  >
+                    {summaryItems.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value, name) => {
+                      const v = typeof value === 'number' ? value : 0
+                      const pct = summaryTotal > 0 ? ((v / summaryTotal) * 100).toFixed(1) : '0'
+                      return [`${v.toFixed(3)} ر.س (${pct}%)`, name]
+                    }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {summaryItems.map(item => {
@@ -156,7 +150,6 @@ function ChartCard({
       padding: '18px 20px',
       boxShadow: '0 1px 3px rgba(0,0,0,0.06)',
     }}>
-      {/* Title */}
       <div style={{
         fontSize: 11, fontWeight: 600, letterSpacing: '0.07em',
         textTransform: 'uppercase', color: C.gray400,
@@ -175,40 +168,35 @@ function ChartCard({
         </div>
       ) : (
         <>
-          {/* Doughnut */}
           <div style={{ position: 'relative', height: 160 }}>
-            <Doughnut
-              data={{
-                labels: items.map(x => x.label),
-                datasets: [{
-                  data: items.map(x => x.value),
-                  backgroundColor: palette.slice(0, items.length),
-                  borderWidth: 2,
-                  borderColor: '#fff',
-                  hoverOffset: 6,
-                }],
-              }}
-              options={{
-                responsive: true,
-                maintainAspectRatio: false,
-                cutout: '60%',
-                plugins: {
-                  legend: { display: false },
-                  tooltip: {
-                    callbacks: {
-                      label: ctx => {
-                        const val = ctx.parsed as number
-                        const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0'
-                        return ` ${ctx.label}: ${val.toFixed(3)} ر.س (${pct}%)`
-                      },
-                    },
-                  },
-                },
-              }}
-            />
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={items}
+                  dataKey="value"
+                  nameKey="label"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={45}
+                  outerRadius={70}
+                  strokeWidth={2}
+                  stroke="#fff"
+                >
+                  {items.map((_, i) => (
+                    <Cell key={i} fill={palette[i % palette.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value, name) => {
+                    const v = typeof value === 'number' ? value : 0
+                    const pct = total > 0 ? ((v / total) * 100).toFixed(1) : '0'
+                    return [`${v.toFixed(3)} ر.س (${pct}%)`, name]
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
           </div>
 
-          {/* Legend below */}
           <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 120, overflowY: 'auto' }}>
             {items.map((item, i) => {
               const pct = total > 0 ? ((item.value / total) * 100).toFixed(1) : '0'

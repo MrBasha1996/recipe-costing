@@ -9,6 +9,9 @@ export interface Brand {
   name_ar: string
   fc_target_low?: number
   fc_target_high?: number
+  logo_url?: string | null
+  primary_color?: string | null
+  delivery_commission_pct?: number | null
 }
 
 export interface UserProfile {
@@ -160,6 +163,7 @@ export interface StockMovement {
   qty: number
   note: string | null
   performed_by: string | null
+  production_session_id: string | null
   created_at: string
 }
 

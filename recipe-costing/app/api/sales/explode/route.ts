@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { requireBrandAccess, isAuthError } from '@/lib/auth'
+import { requireModulePermission, isAuthError } from '@/lib/auth'
 import { executeBatchProduce } from '@/lib/produceBatch'
 
 const BodySchema = z.object({
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.issues[0]?.message ?? 'بيانات غير صالحة' }, { status: 400 })
   }
 
-  const user = await requireBrandAccess(parsed.data.brand_id)
+  const user = await requireModulePermission(parsed.data.brand_id, 'sales', 'update')
   if (isAuthError(user)) return user
 
   const { brand_id, import_batch, auto_produce_batches, performed_by } = parsed.data
@@ -163,7 +163,7 @@ export async function POST(request: NextRequest) {
           .in('recipe_id', compRecipeIds)
 
         // توسيع ucMap بأي مكونات جديدة من الكومبو
-        const newIngSkus = [...new Set((compIngs || []).map((i: any) => i.ing_sku))]
+        const newIngSkus = [...new Set<string>((compIngs || []).map((i: any) => i.ing_sku as string))]
           .filter(s => !ucMap.has(s))
         if (newIngSkus.length > 0) {
           const { data: newUcRows } = await (admin.from('unit_conversions') as any)

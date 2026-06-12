@@ -23,6 +23,13 @@ export function monthRange(month: string): { start: string; end: string } {
   }
 }
 
+/** Shifts a YYYY-MM string by delta months (negative = backward) */
+export function shiftMonth(ym: string, delta: number): string {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m - 1 + delta, 1)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 /** Returns last N year-month strings, newest first */
 export function lastNMonths(n: number): string[] {
   const result: string[] = []

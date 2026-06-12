@@ -38,8 +38,8 @@ export async function GET(request: NextRequest) {
   let usersMap: Record<string, string> = {}
   if (userIds.size > 0) {
     const { data: users } = await (admin.from('user_profiles') as any)
-      .select('id, full_name').in('id', Array.from(userIds))
-    for (const u of (users ?? []) as any[]) usersMap[u.id] = u.full_name
+      .select('id, name_ar').in('id', Array.from(userIds))
+    for (const u of (users ?? []) as any[]) usersMap[u.id] = u.name_ar
   }
 
   const sessions = ((data ?? []) as any[]).map((s: any) => ({

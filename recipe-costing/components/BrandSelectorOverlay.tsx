@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { BrandId } from '@/types'
 
@@ -69,12 +69,15 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
   const [leaving, setLeaving] = useState(false)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
   const [brands, setBrands] = useState<{ id: string; name: string; name_ar: string }[]>([])
+  const fetchedRef = useRef(false)
 
   useEffect(() => {
+    if (!visible || fetchedRef.current) return
+    fetchedRef.current = true
     const supabase = createClient()
     ;(supabase.from('brands') as any).select('id, name, name_ar').order('id')
       .then(({ data }: any) => { if (data) setBrands(data) })
-  }, [])
+  }, [visible])
 
   useEffect(() => {
     if (visible) {

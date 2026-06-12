@@ -1,8 +1,7 @@
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
-
-const VALID_BRANDS = ['ti', 'bb']
+import { getValidBrands } from '@/lib/server-brand'
 
 export default async function RootPage() {
   const supabase = await createClient()
@@ -15,15 +14,17 @@ export default async function RootPage() {
     .eq('id', user.id)
     .single()
 
-  const brandAccess = (profile as any)?.brand_access ?? 'bb'
+  const brandAccess = (profile as any)?.brand_access ?? ''
+  const validBrands = await getValidBrands()
+  const fallback = validBrands[0] ?? 'costing'
 
   let brand: string
   if (brandAccess === 'all') {
     const cookieStore = await cookies()
     const last = cookieStore.get('brand_session')?.value
-    brand = last && VALID_BRANDS.includes(last) ? last : 'bb'
+    brand = last && validBrands.includes(last) ? last : fallback
   } else {
-    brand = brandAccess
+    brand = validBrands.includes(brandAccess) ? brandAccess : fallback
   }
 
   redirect(`/${brand}/costing`)

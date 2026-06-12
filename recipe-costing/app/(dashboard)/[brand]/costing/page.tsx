@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import dynamic from 'next/dynamic'
 import { useParams } from 'next/navigation'
 import { useCostingStore } from '@/stores/costingStore'
 import CostingSidebar from '@/components/costing/CostingSidebar'
-import RecipeEditor from '@/components/costing/RecipeEditor'
 import type { Product, BrandId } from '@/types'
+
+const RecipeEditor = dynamic(() => import('@/components/costing/RecipeEditor'), { ssr: false })
 
 export default function CostingPage() {
   const [mounted, setMounted] = useState(false)

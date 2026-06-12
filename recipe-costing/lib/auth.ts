@@ -53,6 +53,53 @@ export async function requireSuperAdmin(): Promise<AuthUser | NextResponse> {
   return user as AuthUser
 }
 
+/**
+ * Verifies brand access AND module permission in one call.
+ * Super admins bypass the module check.
+ * Use in every API route that writes data with service_role (admin client).
+ */
+export async function requireModulePermission(
+  brandId: string,
+  moduleCode: string,
+  action: 'view' | 'create' | 'update' | 'delete' | 'approve' | 'import' | 'export',
+): Promise<AuthUser | NextResponse> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+
+  const { data: profile } = await (supabase.from('user_profiles') as any)
+    .select('role_id, brand_access, roles(is_super_admin)')
+    .eq('id', user.id)
+    .single()
+
+  if (!profile || (profile.brand_access !== 'all' && profile.brand_access !== brandId)) {
+    return NextResponse.json({ error: 'ليس لديك صلاحية لهذا البراند' }, { status: 403 })
+  }
+
+  if ((profile.roles as any)?.is_super_admin) return user as AuthUser
+
+  if (!profile.role_id) {
+    return NextResponse.json({ error: 'لا يوجد دور مُعيَّن' }, { status: 403 })
+  }
+
+  const { data: perms } = await (supabase.from('role_permissions') as any)
+    .select(`can_view, can_create, can_update, can_delete, can_approve, can_import, can_export,
+             modules!inner(code)`)
+    .eq('role_id', profile.role_id)
+
+  const perm = (perms as any[])?.find((p: any) => p.modules?.code === moduleCode)
+
+  const actionMap: Record<string, string> = {
+    view: 'can_view', create: 'can_create', update: 'can_update',
+    delete: 'can_delete', approve: 'can_approve', import: 'can_import', export: 'can_export',
+  }
+  if (!perm?.[actionMap[action]]) {
+    return NextResponse.json({ error: 'ليس لديك صلاحية لهذا الإجراء' }, { status: 403 })
+  }
+
+  return user as AuthUser
+}
+
 /** Type guard: distinguishes a successful user from an error response. */
 export function isAuthError(v: AuthUser | NextResponse): v is NextResponse {
   return v instanceof NextResponse
