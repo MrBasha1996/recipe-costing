@@ -65,7 +65,7 @@ export function applyInheritance(
   action: PermissionAction,
   value: boolean,
 ): ModulePermState {
-  let next = { ...prev, [`can_${action}`]: value }
+  const next = { ...prev, [`can_${action}`]: value }
 
   if (value) {
     // Every action requires view

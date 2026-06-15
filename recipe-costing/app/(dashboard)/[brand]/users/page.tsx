@@ -52,7 +52,7 @@ export default function UsersPage() {
     const logs = (data as AuditLog[]) || []
     const profileIds = [...new Set(logs.map(l => l.performed_by).filter(Boolean))]
 
-    let profileMap: Record<string, string> = {}
+    const profileMap: Record<string, string> = {}
     if (profileIds.length > 0) {
       const { data: profiles } = await supabase
         .from('user_profiles')

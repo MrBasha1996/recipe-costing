@@ -9,10 +9,10 @@ import type { MovementType, StockMovement, BrandId } from '@/types'
 interface InventoryItem {
   sku: string; name: string; unit: string; type: 'ingredient' | 'batch'
   stock_id: string | null; current_qty: number; min_qty: number
-  expiry_date: string | null; batch_number: string | null
+  expiry_date: string | null; batch_number: string | null; cost: number; category?: string
 }
 
-type Tab = 'stock' | 'add' | 'history' | 'stocktake' | 'availability' | 'aging' | 'orders'
+type Tab = 'stock' | 'add' | 'history' | 'stocktake' | 'availability' | 'aging' | 'orders' | 'valuation' | 'ledger' | 'waste-analytics'
 
 interface StocktakeSession {
   id: string; session_date: string; notes: string | null
@@ -133,7 +133,7 @@ export default function InventoryClient({ initialItems, initialMovements, brand 
       )}
 
       <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit flex-wrap">
-        {([['stock', 'المخزون الحالي'], ['add', 'إضافة حركة'], ['history', 'سجل الحركات'], ['stocktake', 'الجرد الدوري'], ['availability', 'توافر الأطباق'], ['aging', 'عمر المخزون'], ['orders', 'طلبات الشراء']] as [Tab, string][]).map(([v, l]) => (
+        {([['stock', 'المخزون الحالي'], ['add', 'إضافة حركة'], ['history', 'سجل الحركات'], ['stocktake', 'الجرد الدوري'], ['availability', 'توافر الأطباق'], ['aging', 'عمر المخزون'], ['orders', 'طلبات الشراء'], ['valuation', 'قيمة المخزون'], ['ledger', 'بطاقة الصنف'], ['waste-analytics', 'تحليل الهالك']] as [Tab, string][]).map(([v, l]) => (
           <button key={v} onClick={() => setTab(v)}
             className={`relative px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {l}
@@ -153,6 +153,9 @@ export default function InventoryClient({ initialItems, initialMovements, brand 
       {tab === 'availability' && <AvailabilityTab brand={brand} />}
       {tab === 'aging'        && <AgingTab brand={brand} />}
       {tab === 'orders'       && <PurchaseOrdersTab brand={brand} />}
+      {tab === 'valuation'      && <ValuationTab items={items} />}
+      {tab === 'ledger'         && <LedgerTab items={items} brand={brand} />}
+      {tab === 'waste-analytics' && <WasteAnalyticsTab brand={brand} />}
     </div>
   )
 }
@@ -324,7 +327,9 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
     const newQty = Math.max(0, selected.current_qty + delta)
     const { error: movErr } = await (supabase.from('stock_movements') as any).insert({
       brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
-      movement_type: movType, qty: numQty, note: note || null, performed_by: user?.id ?? null,
+      movement_type: movType, qty: numQty,
+      value: Math.round(numQty * (selected.cost ?? 0) * 10000) / 10000,
+      note: note || null, performed_by: user?.id ?? null,
     })
     if (movErr) { setMsg({ ok: false, text: movErr.message }); setSaving(false); return }
     await (supabase.from('stock_items') as any).upsert({
@@ -579,21 +584,38 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     const supabase = createClient()
     const user = (await supabase.auth.getUser()).data.user
     const minQtyMap = new Map(items.map(i => [i.sku, i.min_qty]))
+    const costMap   = new Map(items.map(i => [i.sku, i.cost ?? 0]))
+
     for (const item of sessionItems) {
       await (supabase.from('stocktake_items') as any).update({ actual_qty: item.actual_qty }).eq('id', item.id)
     }
+
+    // Fetch live stock quantities at finalize time — not the frozen snapshot from session open
+    const sessionSkus = sessionItems.map(i => i.ing_sku)
+    const { data: liveStock } = await (supabase.from('stock_items') as any)
+      .select('ing_sku, current_qty')
+      .eq('brand_id', brand)
+      .in('ing_sku', sessionSkus)
+    const liveQtyMap = new Map<string, number>(
+      ((liveStock ?? []) as any[]).map(s => [s.ing_sku, s.current_qty ?? 0])
+    )
+
     const note = `جرد دوري — ${activeSession.session_date}`
     for (const item of sessionItems) {
-      const variance = item.actual_qty - item.theoretical_qty
-      if (Math.abs(variance) < 0.001) continue
+      const liveQty = liveQtyMap.get(item.ing_sku) ?? 0
+      const variance = item.actual_qty - liveQty
+      // Always set stock to the physically counted qty
       await (supabase.from('stock_items') as any).upsert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
         unit: item.unit, current_qty: item.actual_qty, min_qty: minQtyMap.get(item.ing_sku) ?? 0,
         updated_at: new Date().toISOString(),
       }, { onConflict: 'brand_id,ing_sku' })
+      if (Math.abs(variance) < 0.001) continue
       await (supabase.from('stock_movements') as any).insert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        movement_type: 'adjustment', qty: variance, note, performed_by: user?.id ?? null,
+        movement_type: 'adjustment', qty: variance,
+        value: Math.round(Math.abs(variance) * (costMap.get(item.ing_sku) ?? 0) * 10000) / 10000,
+        note, performed_by: user?.id ?? null,
       })
     }
     await (supabase.from('stocktake_sessions') as any)
@@ -1007,6 +1029,429 @@ function AgingTab({ brand }: { brand: BrandId }) {
   )
 }
 
+// ── Tab 9: Item Ledger (بطاقة الصنف) ─────────────────────────────
+
+function signedEffect(type: MovementType, qty: number): number {
+  if (type === 'in')         return qty
+  if (type === 'out')        return -Math.abs(qty)
+  if (type === 'waste')      return -Math.abs(qty)
+  /* adjustment */           return qty  // stored signed
+}
+
+interface LedgerRow {
+  id: string; created_at: string; movement_type: MovementType
+  qty: number; value: number | null; note: string | null
+  running_balance: number
+}
+
+function LedgerTab({ items, brand }: { items: InventoryItem[]; brand: BrandId }) {
+  const defaultFrom = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toLocaleDateString('en-CA')
+  const defaultTo   = new Date().toLocaleDateString('en-CA')
+
+  const [selectedSku, setSelectedSku] = useState<string>('')
+  const [search, setSearch]           = useState('')
+  const [showList, setShowList]       = useState(false)
+  const [fromDate, setFromDate]       = useState(defaultFrom)
+  const [toDate, setToDate]           = useState(defaultTo)
+  const [loading, setLoading]         = useState(false)
+  const [rows, setRows]               = useState<LedgerRow[]>([])
+  const [openingBalance, setOpeningBalance] = useState<number | null>(null)
+  const [closingBalance, setClosingBalance] = useState<number | null>(null)
+
+  const selectedItem = items.find(i => i.sku === selectedSku) ?? null
+  const filteredItems = search.length >= 1
+    ? items.filter(i => i.name.toLowerCase().includes(search.toLowerCase())).slice(0, 10)
+    : []
+
+  const load = useCallback(async () => {
+    if (!selectedSku) return
+    setLoading(true)
+    const supabase = createClient()
+
+    // Fetch movements in range (for display)
+    const { data: rangeMovs } = await (supabase.from('stock_movements') as any)
+      .select('id, created_at, movement_type, qty, value, note')
+      .eq('brand_id', brand)
+      .eq('ing_sku', selectedSku)
+      .gte('created_at', fromDate)
+      .lte('created_at', toDate + 'T23:59:59')
+      .order('created_at', { ascending: true })
+
+    // Fetch movements AFTER toDate (to compute opening/closing from current stock)
+    const { data: futureMovs } = await (supabase.from('stock_movements') as any)
+      .select('movement_type, qty')
+      .eq('brand_id', brand)
+      .eq('ing_sku', selectedSku)
+      .gt('created_at', toDate + 'T23:59:59')
+
+    // current_qty from stock_items
+    const { data: stockRow } = await (supabase.from('stock_items') as any)
+      .select('current_qty')
+      .eq('brand_id', brand)
+      .eq('ing_sku', selectedSku)
+      .maybeSingle()
+
+    const currentQty: number = (stockRow as any)?.current_qty ?? 0
+
+    // closing = currentQty minus all effects that happened AFTER toDate
+    const futureNet = ((futureMovs ?? []) as any[]).reduce((s: number, m: any) => s + signedEffect(m.movement_type, m.qty), 0)
+    const closing = currentQty - futureNet
+
+    // Build ledger rows with running balance
+    const rangeList = (rangeMovs ?? []) as any[]
+    let balance = closing
+    // Walk forward from opening: start = closing - sum(range effects)
+    const rangeNet = rangeList.reduce((s: number, m: any) => s + signedEffect(m.movement_type, m.qty), 0)
+    const opening = closing - rangeNet
+
+    balance = opening
+    const ledgerRows: LedgerRow[] = rangeList.map(m => {
+      const effect = signedEffect(m.movement_type, m.qty)
+      balance += effect
+      return {
+        id: m.id, created_at: m.created_at, movement_type: m.movement_type,
+        qty: m.qty, value: m.value ?? null, note: m.note ?? null,
+        running_balance: Math.round(balance * 1000) / 1000,
+      }
+    })
+
+    setOpeningBalance(Math.round(opening * 1000) / 1000)
+    setClosingBalance(Math.round(closing * 1000) / 1000)
+    setRows(ledgerRows)
+    setLoading(false)
+  }, [brand, selectedSku, fromDate, toDate])
+
+  useEffect(() => { if (selectedSku) load() }, [load, selectedSku])
+
+  // Summary stats
+  const totalIn    = rows.filter(r => r.movement_type === 'in').reduce((s, r) => s + r.qty, 0)
+  const totalOut   = rows.filter(r => r.movement_type === 'out').reduce((s, r) => s + r.qty, 0)
+  const totalWaste = rows.filter(r => r.movement_type === 'waste').reduce((s, r) => s + r.qty, 0)
+  const totalAdj   = rows.filter(r => r.movement_type === 'adjustment').reduce((s, r) => s + r.qty, 0)
+  const totalValueOut = rows.filter(r => r.movement_type === 'out' || r.movement_type === 'waste').reduce((s, r) => s + (r.value ?? 0), 0)
+
+  async function exportExcel() {
+    if (!selectedItem || openingBalance === null) return
+    let _xlsx: typeof import('xlsx') | null = null
+    if (!_xlsx) _xlsx = await import('xlsx')
+    const X = _xlsx
+    const wb = X.utils.book_new()
+    const header = [['بطاقة الصنف:', selectedItem.name, '', 'الوحدة:', selectedItem.unit]]
+    header.push(['الفترة:', `${fromDate} → ${toDate}`, '', '', ''])
+    header.push([])
+    header.push(['رصيد أول المدة', '', '', '', String(openingBalance)])
+    const dataRows = rows.map(r => [
+      new Date(r.created_at).toLocaleDateString('ar-SA'),
+      movementLabel(r.movement_type),
+      r.movement_type === 'out' || r.movement_type === 'waste' ? -Math.abs(r.qty) : r.qty,
+      r.value ?? '',
+      r.running_balance,
+      r.note ?? '',
+    ])
+    const allRows = [
+      ...header,
+      ['التاريخ', 'النوع', 'الكمية', 'القيمة (ر.س)', 'الرصيد', 'ملاحظة'],
+      ...dataRows,
+      [],
+      ['رصيد آخر المدة', '', '', '', closingBalance],
+    ]
+    const ws = X.utils.aoa_to_sheet(allRows)
+    ws['!cols'] = [{ wch: 14 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 12 }, { wch: 30 }]
+    X.utils.book_append_sheet(wb, ws, 'بطاقة الصنف')
+    X.writeFile(wb, `بطاقة_${selectedItem.name}_${fromDate}.xlsx`)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="font-semibold text-gray-900">بطاقة الصنف</h2>
+        <p className="text-xs text-gray-500 mt-0.5">رصيد أول المدة + الحركات + رصيد آخر المدة</p>
+      </div>
+
+      {/* Controls */}
+      <div className="flex items-end gap-3 flex-wrap">
+        {/* Ingredient picker */}
+        <div className="space-y-1 relative">
+          <label className="text-xs text-gray-500">الصنف</label>
+          <input
+            type="text"
+            placeholder="ابحث..."
+            value={selectedItem ? selectedItem.name : search}
+            onChange={e => { setSearch(e.target.value); setSelectedSku(''); setShowList(true) }}
+            onFocus={() => setShowList(true)}
+            className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm text-gray-900 focus:outline-none focus:border-blue-500 w-52"
+          />
+          {showList && filteredItems.length > 0 && !selectedSku && (
+            <div className="absolute z-10 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg overflow-hidden">
+              {filteredItems.map(item => (
+                <button key={item.sku} type="button"
+                  onClick={() => { setSelectedSku(item.sku); setSearch(''); setShowList(false) }}
+                  className="w-full text-right px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center justify-between">
+                  <span>{item.name}</span>
+                  <span className="text-xs text-gray-400 font-mono">{item.current_qty.toFixed(2)} {item.unit}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs text-gray-500">من</label>
+          <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)}
+            className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        <div className="space-y-1">
+          <label className="text-xs text-gray-500">إلى</label>
+          <input type="date" value={toDate} onChange={e => setToDate(e.target.value)}
+            className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-blue-500"
+          />
+        </div>
+        {selectedSku && (
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors self-end">
+            ⬇ Excel
+          </button>
+        )}
+      </div>
+
+      {!selectedSku && (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">
+          اختر صنفاً لعرض بطاقته المحاسبية
+        </div>
+      )}
+
+      {selectedSku && loading && (
+        <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحميل...</div>
+      )}
+
+      {selectedSku && !loading && openingBalance !== null && (
+        <>
+          {/* KPI strip */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="bg-green-50 border border-green-100 rounded-xl px-3 py-2.5">
+              <p className="text-xs text-green-500">إجمالي وارد</p>
+              <p className="font-mono font-bold text-green-700">{totalIn.toFixed(3)} <span className="text-xs font-normal">{selectedItem?.unit}</span></p>
+            </div>
+            <div className="bg-red-50 border border-red-100 rounded-xl px-3 py-2.5">
+              <p className="text-xs text-red-400">إجمالي صادر (وصفات)</p>
+              <p className="font-mono font-bold text-red-600">{totalOut.toFixed(3)} <span className="text-xs font-normal">{selectedItem?.unit}</span></p>
+            </div>
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2.5">
+              <p className="text-xs text-amber-500">هالك</p>
+              <p className="font-mono font-bold text-amber-600">{totalWaste.toFixed(3)} <span className="text-xs font-normal">{selectedItem?.unit}</span></p>
+            </div>
+            <div className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2.5">
+              <p className="text-xs text-gray-500">قيمة المنصرف + هالك</p>
+              <p className="font-mono font-bold text-gray-700">{totalValueOut.toFixed(2)} <span className="text-xs font-normal">ر.س</span></p>
+            </div>
+          </div>
+          {totalAdj !== 0 && (
+            <div className="bg-purple-50 border border-purple-100 rounded-xl px-3 py-2 text-xs">
+              <span className="text-purple-600 font-medium">تسويات خلال الفترة: </span>
+              <span className="font-mono text-purple-700">{totalAdj >= 0 ? '+' : ''}{totalAdj.toFixed(3)} {selectedItem?.unit}</span>
+            </div>
+          )}
+
+          {/* Ledger table */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">التاريخ</th>
+                  <th className="text-center px-4 py-3 font-medium">النوع</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة (ر.س)</th>
+                  <th className="text-center px-4 py-3 font-medium">الرصيد</th>
+                  <th className="text-right px-4 py-3 font-medium">ملاحظة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {/* Opening balance row */}
+                <tr className="bg-blue-50 border-b border-blue-100">
+                  <td className="px-4 py-2.5 text-xs text-blue-600 font-medium">{fromDate}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-semibold">رصيد أول المدة</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-gray-400 text-xs">—</td>
+                  <td className="px-4 py-2.5 text-center text-gray-400 text-xs">—</td>
+                  <td className="px-4 py-2.5 text-center font-mono font-bold text-blue-700">{openingBalance.toFixed(3)}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-400">—</td>
+                </tr>
+
+                {rows.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-8 text-center text-gray-400 text-xs">لا توجد حركات في هذه الفترة</td>
+                  </tr>
+                )}
+
+                {rows.map((r, i) => {
+                  const effect = signedEffect(r.movement_type, r.qty)
+                  const isPositive = effect > 0
+                  return (
+                    <tr key={r.id} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                      <td className="px-4 py-2.5 text-xs text-gray-500 whitespace-nowrap">
+                        {new Date(r.created_at).toLocaleDateString('ar-SA')}
+                        <span className="text-gray-300 mr-1 font-mono">{new Date(r.created_at).toLocaleTimeString('ar-SA', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </td>
+                      <td className="px-4 py-2.5 text-center">
+                        <span className={`text-xs font-semibold ${movementColor(r.movement_type)}`}>{movementLabel(r.movement_type)}</span>
+                      </td>
+                      <td className={`px-4 py-2.5 text-center font-mono font-semibold text-sm ${isPositive ? 'text-green-600' : 'text-red-500'}`}>
+                        {isPositive ? '+' : ''}{effect.toFixed(3)}
+                      </td>
+                      <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-600">
+                        {r.value != null ? r.value.toFixed(2) : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-center font-mono font-bold text-gray-800 text-sm">
+                        {r.running_balance.toFixed(3)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-gray-400 max-w-[180px] truncate">{r.note ?? '—'}</td>
+                    </tr>
+                  )
+                })}
+
+                {/* Closing balance row */}
+                <tr className="bg-gray-800 text-white">
+                  <td className="px-4 py-2.5 text-xs font-medium">{toDate}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className="text-xs bg-gray-600 text-white px-2 py-0.5 rounded-full font-semibold">رصيد آخر المدة</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center text-gray-400 text-xs">—</td>
+                  <td className="px-4 py-2.5 text-center text-gray-400 text-xs">—</td>
+                  <td className="px-4 py-2.5 text-center font-mono font-bold text-lg">{closingBalance!.toFixed(3)}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-400">—</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Tab 8: Stock Valuation ────────────────────────────────────────
+
+function ValuationTab({ items }: { items: InventoryItem[] }) {
+  const ingItems = items.filter(i => i.type === 'ingredient' && i.cost > 0)
+
+  // Group by category
+  const catMap = new Map<string, InventoryItem[]>()
+  for (const item of ingItems) {
+    const cat = item.category ?? 'غير مصنّف'
+    if (!catMap.has(cat)) catMap.set(cat, [])
+    catMap.get(cat)!.push(item)
+  }
+  const categories = [...catMap.entries()].sort((a, b) => a[0].localeCompare(b[0], 'ar'))
+  const grandTotal = ingItems.reduce((s, i) => s + i.current_qty * i.cost, 0)
+  const zeroStock  = ingItems.filter(i => i.current_qty <= 0).length
+
+  async function exportExcel() {
+    let _xlsx: typeof import('xlsx') | null = null
+    if (!_xlsx) _xlsx = await import('xlsx')
+    const X = _xlsx
+    const wb = X.utils.book_new()
+    const rows: any[] = [['الفئة', 'الصنف', 'الوحدة', 'الكمية', 'تكلفة/وحدة (ر.س)', 'القيمة الإجمالية (ر.س)']]
+    for (const [cat, catItems] of categories) {
+      for (const item of catItems) {
+        rows.push([cat, item.name, item.unit, item.current_qty, item.cost, item.current_qty * item.cost])
+      }
+      const catTotal = catItems.reduce((s, i) => s + i.current_qty * i.cost, 0)
+      rows.push(['', `إجمالي ${cat}`, '', '', '', catTotal])
+      rows.push([])
+    }
+    rows.push(['', 'الإجمالي الكلي', '', '', '', grandTotal])
+    const ws = X.utils.aoa_to_sheet(rows)
+    ws['!cols'] = [{ wch: 18 }, { wch: 28 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 22 }]
+    X.utils.book_append_sheet(wb, ws, 'قيمة المخزون')
+    X.writeFile(wb, `قيمة_المخزون_${new Date().toISOString().slice(0, 10)}.xlsx`)
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="font-semibold text-gray-900">قيمة المخزون الحالية</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {ingItems.length} صنف مواد خام
+            {zeroStock > 0 && <span className="text-gray-400"> · {zeroStock} كمية صفر</span>}
+          </p>
+        </div>
+        <button onClick={exportExcel}
+          className="flex items-center gap-2 text-xs px-3 py-1.5 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-700 transition-colors">
+          ⬇ تصدير Excel
+        </button>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
+          <p className="text-xs text-blue-500">إجمالي قيمة المخزون</p>
+          <p className="text-xl font-bold font-mono text-blue-700 mt-0.5">{grandTotal.toFixed(2)} <span className="text-sm font-normal">ر.س</span></p>
+        </div>
+        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+          <p className="text-xs text-gray-500">عدد الأصناف</p>
+          <p className="text-xl font-bold text-gray-700 mt-0.5">{ingItems.length}</p>
+        </div>
+        <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+          <p className="text-xs text-gray-500">عدد الفئات</p>
+          <p className="text-xl font-bold text-gray-700 mt-0.5">{categories.length}</p>
+        </div>
+      </div>
+
+      {/* Per-category tables */}
+      {categories.map(([cat, catItems]) => {
+        const catTotal = catItems.reduce((s, i) => s + i.current_qty * i.cost, 0)
+        const sorted   = [...catItems].sort((a, b) => (b.current_qty * b.cost) - (a.current_qty * a.cost))
+        return (
+          <div key={cat} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 border-b border-gray-200">
+              <span className="font-semibold text-gray-800 text-sm">{cat}</span>
+              <span className="font-mono font-bold text-blue-700 text-sm">{catTotal.toFixed(2)} ر.س</span>
+            </div>
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-100">
+                  <th className="text-right px-4 py-2 font-medium">الصنف</th>
+                  <th className="text-center px-4 py-2 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-2 font-medium">تكلفة/وحدة</th>
+                  <th className="text-left px-4 py-2 font-medium">القيمة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((item, i) => {
+                  const value = item.current_qty * item.cost
+                  return (
+                    <tr key={item.sku} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                      <td className="px-4 py-2.5">
+                        <span className="font-medium text-gray-900">{item.name}</span>
+                        <span className="text-[10px] text-gray-400 font-mono mr-2">{item.sku}</span>
+                        {item.current_qty <= 0 && <span className="text-[10px] bg-red-50 text-red-500 px-1 rounded mr-1">نفد</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{item.current_qty.toFixed(3)} {item.unit}</td>
+                      <td className="px-4 py-2.5 text-center font-mono text-gray-500 text-xs">{item.cost.toFixed(4)}</td>
+                      <td className={`px-4 py-2.5 font-mono font-semibold text-xs ${value > 0 ? 'text-gray-800' : 'text-gray-300'}`}>
+                        {value > 0 ? `${value.toFixed(2)} ر.س` : '—'}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
+
+      {/* Grand total row */}
+      <div className="bg-blue-600 text-white rounded-xl px-4 py-3 flex items-center justify-between">
+        <span className="font-semibold text-sm">إجمالي قيمة المخزون</span>
+        <span className="font-mono font-bold text-lg">{grandTotal.toFixed(2)} ر.س</span>
+      </div>
+    </div>
+  )
+}
+
 // ── Tab 7: Purchase Orders ────────────────────────────────────────
 
 function PurchaseOrdersTab({ brand }: { brand: BrandId }) {
@@ -1114,6 +1559,150 @@ function PurchaseOrdersTab({ brand }: { brand: BrandId }) {
             </tfoot>
           </table>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Tab 10: Waste Analytics ────────────────────────────────────────
+
+interface WasteRow {
+  ing_sku: string; ing_name: string; unit: string
+  total_qty: number; total_value: number; count: number
+}
+
+function WasteAnalyticsTab({ brand }: { brand: BrandId }) {
+  const [rows, setRows]       = useState<WasteRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [months, setMonths]   = useState(3)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const since = new Date()
+    since.setMonth(since.getMonth() - months)
+    const { data } = await (supabase.from('stock_movements') as any)
+      .select('ing_sku, ing_name, unit, qty, value')
+      .eq('brand_id', brand)
+      .eq('movement_type', 'waste')
+      .gte('created_at', since.toISOString())
+    const map = new Map<string, WasteRow>()
+    for (const r of (data || []) as any[]) {
+      const ex = map.get(r.ing_sku)
+      if (ex) {
+        ex.total_qty   += r.qty
+        ex.total_value += r.value ?? 0
+        ex.count       += 1
+      } else {
+        map.set(r.ing_sku, { ing_sku: r.ing_sku, ing_name: r.ing_name, unit: r.unit ?? '', total_qty: r.qty, total_value: r.value ?? 0, count: 1 })
+      }
+    }
+    setRows([...map.values()].sort((a, b) => b.total_value - a.total_value))
+    setLoading(false)
+  }, [brand, months])
+
+  useEffect(() => { load() }, [load])
+
+  const totalQty   = rows.reduce((s, r) => s + r.total_qty, 0)
+  const totalValue = rows.reduce((s, r) => s + r.total_value, 0)
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-4">
+      {/* Controls */}
+      <div className="flex items-center gap-4 flex-wrap">
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[1, 3, 6, 12].map(n => (
+            <button key={n} onClick={() => setMonths(n)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${months === n ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {n === 1 ? 'شهر' : `${n} أشهر`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-red-50 border border-red-100 rounded-xl p-4">
+          <p className="text-xs text-red-500 font-medium">إجمالي قيمة الهالك</p>
+          <p className="text-xl font-bold text-red-700 font-mono mt-1">{totalValue.toFixed(2)} <span className="text-sm font-normal">ر.س</span></p>
+        </div>
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium">عدد الأصناف المتضررة</p>
+          <p className="text-xl font-bold text-gray-700 font-mono mt-1">{rows.length}</p>
+        </div>
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium">عدد حركات الهالك</p>
+          <p className="text-xl font-bold text-gray-700 font-mono mt-1">{rows.reduce((s, r) => s + r.count, 0)}</p>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">
+          لا توجد حركات هالك في هذه الفترة
+        </div>
+      ) : (
+        <>
+          {/* Bar chart */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <p className="text-xs font-semibold text-gray-500 mb-3">أعلى الأصناف هالكاً بالقيمة (ر.س)</p>
+            <div className="space-y-2">
+              {rows.slice(0, 10).map(r => (
+                <div key={r.ing_sku} className="flex items-center gap-3">
+                  <span className="text-xs text-gray-700 w-32 truncate text-right">{r.ing_name}</span>
+                  <div className="flex-1 h-4 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-400 rounded-full transition-all"
+                      style={{ width: `${rows[0].total_value > 0 ? (r.total_value / rows[0].total_value) * 100 : 0}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-semibold text-red-700 w-20 text-left">{r.total_value.toFixed(2)} ر.س</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-400 border-b border-gray-100 bg-gray-50">
+                  <th className="text-right px-4 py-3 font-medium">الصنف</th>
+                  <th className="text-center px-4 py-3 font-medium">عدد الحركات</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية الكلية</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة الكلية</th>
+                  <th className="text-center px-4 py-3 font-medium">% من الإجمالي</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={r.ing_sku} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                    <td className="px-4 py-2.5">
+                      <span className="font-medium text-gray-900">{r.ing_name}</span>
+                      <span className="text-[10px] text-gray-400 mr-1">/ {r.unit}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center text-xs text-gray-500 font-mono">{r.count}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-700">{r.total_qty.toFixed(3)} {r.unit}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-xs font-semibold text-red-700">{r.total_value.toFixed(2)} ر.س</td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className="text-xs text-gray-500 font-mono">
+                        {totalValue > 0 ? ((r.total_value / totalValue) * 100).toFixed(1) : '0.0'}%
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="bg-gray-50 border-t-2 border-gray-200">
+                  <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-gray-700 text-right">الإجمالي</td>
+                  <td className="px-4 py-3 font-mono font-bold text-red-700 text-center">{totalValue.toFixed(2)} ر.س</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </>
       )}
     </div>
   )

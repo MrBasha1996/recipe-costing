@@ -119,7 +119,7 @@ export async function executeBatchProduce(
     .eq('ing_sku', batch_sku)
     .maybeSingle()
 
-  // ── إنشاء سجل جلسة الإنتاج ───────────────────────────────────────
+  // ── التحقق من توفر المخزون (تحذيرات فقط - لا خصم هنا) ──────────────
   const warnings: string[] = []
   for (const n of needs) {
     const currentQty = stockMap.get(n.sku)?.current_qty ?? 0
@@ -129,6 +129,15 @@ export async function executeBatchProduce(
   }
 
   const prodNote = userNote || `إنتاج باتش — ${batchName} × ${qty_portions}`
+  const batchCurrentQty = (batchStock as any)?.current_qty ?? 0
+
+  // ── حفظ الاحتياجات في actuals_json (الخصم يحدث عند الاعتماد لا هنا) ──
+  const actuals_json = {
+    needs: needs.map(n => ({ sku: n.sku, name: n.name, unit: n.unit, needed: n.needed })),
+    batch_unit:     (batchStock as any)?.unit ?? 'حصة',
+    batch_min_qty:  (batchStock as any)?.min_qty ?? 0,
+    batch_value:    costEstimate ?? 0,
+  }
 
   const { data: sessionRow, error: sessionErr } = await (admin.from('production_sessions') as any)
     .insert({
@@ -141,6 +150,7 @@ export async function executeBatchProduce(
       note: prodNote,
       cost_estimate: costEstimate,
       warnings: warnings,
+      actuals_json,
     })
     .select('id')
     .single()
@@ -149,66 +159,13 @@ export async function executeBatchProduce(
     return { error: sessionErr?.message ?? 'فشل إنشاء جلسة الإنتاج', status: 500 }
   }
 
-  const sessionId = (sessionRow as any).id
-
-  // ── تنفيذ الإنتاج ─────────────────────────────────────────────────
-  const now = new Date().toISOString()
-  const deductUpserts: any[] = []
-  const deductMovements: any[] = []
-
-  for (const n of needs) {
-    const currentQty = stockMap.get(n.sku)?.current_qty ?? 0
-    const newQty = Math.max(0, currentQty - n.needed)
-    deductUpserts.push({
-      brand_id, ing_sku: n.sku, ing_name: n.name, unit: n.unit,
-      current_qty: newQty, min_qty: stockMap.get(n.sku)?.min_qty ?? 0,
-      updated_at: now,
-    })
-    deductMovements.push({
-      brand_id, ing_sku: n.sku, ing_name: n.name,
-      movement_type: 'out',
-      qty: Math.round(n.needed * 1000) / 1000,
-      note: prodNote, performed_by,
-      production_session_id: sessionId,
-    })
-  }
-
-  const { error: deductErr } = await (admin.from('stock_items') as any)
-    .upsert(deductUpserts, { onConflict: 'brand_id,ing_sku' })
-  if (deductErr) return { error: deductErr.message, status: 500 }
-
-  const { error: movErr } = await (admin.from('stock_movements') as any).insert(deductMovements)
-  if (movErr) return { error: movErr.message, status: 500 }
-
-  const batchCurrentQty = (batchStock as any)?.current_qty ?? 0
-  const batchNewQty = batchCurrentQty + qty_portions
-
-  const { error: batchStockErr } = await (admin.from('stock_items') as any).upsert({
-    brand_id, ing_sku: batch_sku,
-    ing_name: batchName,
-    unit: (batchStock as any)?.unit ?? 'حصة',
-    current_qty: batchNewQty,
-    min_qty: (batchStock as any)?.min_qty ?? 0,
-    updated_at: now,
-  }, { onConflict: 'brand_id,ing_sku' })
-  if (batchStockErr) return { error: batchStockErr.message, status: 500 }
-
-  const { error: batchMovErr } = await (admin.from('stock_movements') as any).insert({
-    brand_id, ing_sku: batch_sku, ing_name: batchName,
-    movement_type: 'in',
-    qty: qty_portions,
-    note: prodNote, performed_by,
-    production_session_id: sessionId,
-  })
-  if (batchMovErr) return { error: batchMovErr.message, status: 500 }
-
   return {
     ok: true,
     batch_name: batchName,
     qty_produced: qty_portions,
-    batch_new_stock: batchNewQty,
+    batch_new_stock: batchCurrentQty + qty_portions,
     ingredients_deducted: needs.length,
     warnings,
-    session_id: sessionId,
+    session_id: (sessionRow as any).id,
   }
 }

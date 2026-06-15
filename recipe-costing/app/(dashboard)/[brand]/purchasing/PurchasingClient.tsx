@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
@@ -8,6 +8,8 @@ import { usePermissionsStore } from '@/stores/permissionsStore'
 import { downloadPurchasesTemplate, parsePurchasesFile, validatePurchaseRows } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow, BrandId } from '@/types'
+
+type ViewTab = 'import' | 'analytics'
 
 interface BatchSummary {
   import_batch: string; purchase_date: string; supplier_name: string
@@ -29,6 +31,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
   const canImport = isSuperAdmin || hasPermission('purchasing', 'import')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  const [viewTab, setViewTab] = useState<ViewTab>('import')
   const [batches, setBatches] = useState<BatchSummary[]>(initialBatches)
   const [preview, setPreview] = useState<PurchaseRow[]>([])
   const [parseError, setParseError] = useState<string | null>(null)
@@ -137,6 +140,18 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
         </div>
       </div>
 
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit">
+        {([['import', 'الاستيراد والسجل'], ['analytics', 'تحليل المشتريات']] as [ViewTab, string][]).map(([v, l]) => (
+          <button key={v} onClick={() => setViewTab(v)}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${viewTab === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+            {l}
+          </button>
+        ))}
+      </div>
+
+      {viewTab === 'analytics' && <PurchaseAnalytics brand={brand} />}
+
+      {viewTab === 'import' && (<>
       <div onClick={() => canImport && fileRef.current?.click()}
         className={`border-2 border-dashed rounded-xl p-10 text-center transition-colors bg-white ${canImport ? 'border-gray-300 hover:border-blue-400 cursor-pointer' : 'border-gray-200 opacity-50 cursor-not-allowed'}`}>
         <div className="text-4xl mb-3">📂</div>
@@ -265,6 +280,205 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
           </table>
         )}
       </div>
+      </>)}
+    </div>
+  )
+}
+
+// ── Purchase Analytics ─────────────────────────────────────────────
+
+function PurchaseAnalytics({ brand }: { brand: BrandId }) {
+  const [rows, setRows]       = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [months, setMonths]   = useState(6)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const since = new Date()
+    since.setMonth(since.getMonth() - months)
+    const { data } = await (supabase.from('purchases') as any)
+      .select('purchase_date, supplier_name, ing_sku, ing_name, total_price, unit_cost, qty, unit')
+      .eq('brand_id', brand)
+      .gte('purchase_date', since.toISOString().slice(0, 10))
+      .order('purchase_date', { ascending: true })
+    setRows((data || []) as any[])
+    setLoading(false)
+  }, [brand, months])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحليل...</div>
+  if (!rows.length) return (
+    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">
+      لا توجد بيانات مشتريات في هذه الفترة
+    </div>
+  )
+
+  // ── Monthly trend ────────────────────────────────────────────────
+  const monthlyMap = new Map<string, number>()
+  for (const r of rows) {
+    const m = r.purchase_date.slice(0, 7)
+    monthlyMap.set(m, (monthlyMap.get(m) ?? 0) + r.total_price)
+  }
+  const monthlyData = [...monthlyMap.entries()].sort().map(([m, v]) => {
+    const [y, mo] = m.split('-')
+    const label = new Date(Number(y), Number(mo) - 1).toLocaleDateString('ar-SA', { month: 'short', year: '2-digit' })
+    return { month: label, value: Math.round(v) }
+  })
+
+  // ── By supplier ──────────────────────────────────────────────────
+  const supplierMap = new Map<string, number>()
+  for (const r of rows) {
+    const s = r.supplier_name || 'غير محدد'
+    supplierMap.set(s, (supplierMap.get(s) ?? 0) + r.total_price)
+  }
+  const topSuppliers = [...supplierMap.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+  const totalSupplier = topSuppliers.reduce((s, [, v]) => s + v, 0)
+
+  // ── Top ingredients ──────────────────────────────────────────────
+  const ingMap = new Map<string, { name: string; total: number; qty: number; unit: string }>()
+  for (const r of rows) {
+    const key = r.ing_sku || r.ing_name
+    const ex = ingMap.get(key)
+    if (ex) { ex.total += r.total_price; ex.qty += r.qty }
+    else ingMap.set(key, { name: r.ing_name, total: r.total_price, qty: r.qty, unit: r.unit ?? '' })
+  }
+  const topIngs = [...ingMap.values()].sort((a, b) => b.total - a.total).slice(0, 10)
+  const grandTotal = rows.reduce((s, r) => s + r.total_price, 0)
+
+  // ── Price volatility ─────────────────────────────────────────────
+  const priceHistory = new Map<string, { name: string; unit: string; prices: { date: string; cost: number }[] }>()
+  for (const r of rows) {
+    if (!r.ing_sku || !r.unit_cost) continue
+    const ex = priceHistory.get(r.ing_sku)
+    if (ex) ex.prices.push({ date: r.purchase_date, cost: r.unit_cost })
+    else priceHistory.set(r.ing_sku, { name: r.ing_name, unit: r.unit ?? '', prices: [{ date: r.purchase_date, cost: r.unit_cost }] })
+  }
+  const volatile = [...priceHistory.entries()]
+    .map(([sku, d]) => {
+      const sorted = d.prices.sort((a, b) => a.date.localeCompare(b.date))
+      const first = sorted[0].cost
+      const last  = sorted[sorted.length - 1].cost
+      const pct   = first > 0 ? ((last - first) / first) * 100 : 0
+      return { sku, name: d.name, unit: d.unit, first, last, pct }
+    })
+    .filter(r => Math.abs(r.pct) >= 5)
+    .sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct))
+    .slice(0, 8)
+
+  return (
+    <div className="space-y-5">
+      {/* Period selector */}
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-gray-500">الفترة:</span>
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[3, 6, 12].map(n => (
+            <button key={n} onClick={() => setMonths(n)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${months === n ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {n} أشهر
+            </button>
+          ))}
+        </div>
+        <span className="text-xs text-gray-400">إجمالي: <span className="font-mono font-semibold text-gray-700">{grandTotal.toFixed(0)} ر.س</span></span>
+      </div>
+
+      {/* Monthly trend */}
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <p className="text-xs font-semibold text-gray-500 mb-3">الإنفاق الشهري على المشتريات (ر.س)</p>
+        <div className="flex items-end gap-1 h-28">
+          {monthlyData.map(d => {
+            const maxVal = Math.max(...monthlyData.map(x => x.value), 1)
+            const pct = (d.value / maxVal) * 100
+            return (
+              <div key={d.month} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+                <span className="text-[9px] text-gray-500 font-mono">{d.value > 999 ? `${(d.value / 1000).toFixed(1)}k` : d.value}</span>
+                <div className="w-full bg-blue-500 rounded-t" style={{ height: `${Math.max(pct, 3)}%` }} />
+                <span className="text-[9px] text-gray-400 truncate w-full text-center">{d.month}</span>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Top suppliers */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+            <span className="text-xs font-semibold text-gray-700">أكبر الموردين بالإنفاق</span>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {topSuppliers.map(([name, value], i) => (
+              <div key={name} className="px-4 py-2.5 flex items-center gap-3">
+                <span className="text-xs text-gray-400 w-4 font-mono">{i + 1}</span>
+                <span className="flex-1 text-sm text-gray-800 font-medium truncate">{name}</span>
+                <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full" style={{ width: `${(value / totalSupplier) * 100}%` }} />
+                </div>
+                <span className="text-xs font-mono font-semibold text-blue-700 w-20 text-left">{value.toFixed(0)} ر.س</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Top ingredients */}
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+            <span className="text-xs font-semibold text-gray-700">أعلى 10 مواد بالإنفاق</span>
+          </div>
+          <div className="divide-y divide-gray-50">
+            {topIngs.map((ing, i) => (
+              <div key={i} className="px-4 py-2.5 flex items-center gap-3">
+                <span className="text-xs text-gray-400 w-4 font-mono">{i + 1}</span>
+                <span className="flex-1 text-sm text-gray-800 font-medium truncate">{ing.name}</span>
+                <div className="w-20 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-amber-400 rounded-full" style={{ width: `${Math.min((ing.total / grandTotal) * 100 * 3, 100)}%` }} />
+                </div>
+                <span className="text-xs font-mono font-semibold text-amber-700 w-20 text-left">{ing.total.toFixed(0)} ر.س</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Price volatility */}
+      {volatile.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-700">تذبذب الأسعار خلال الفترة</span>
+            <span className="text-[10px] text-gray-400">مواد تغيّر سعرها ≥ 5%</span>
+          </div>
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-400 border-b border-gray-100 bg-gray-50/50">
+                <th className="text-right px-4 py-2 font-medium">المادة</th>
+                <th className="text-center px-4 py-2 font-medium">أول سعر</th>
+                <th className="text-center px-4 py-2 font-medium">آخر سعر</th>
+                <th className="text-center px-4 py-2 font-medium">التغيّر</th>
+              </tr>
+            </thead>
+            <tbody>
+              {volatile.map(r => (
+                <tr key={r.sku} className="border-b border-gray-50 last:border-0">
+                  <td className="px-4 py-2.5">
+                    <span className="font-medium text-gray-900">{r.name}</span>
+                    <span className="text-[10px] text-gray-400 mr-1">/ {r.unit}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-500">{r.first.toFixed(4)}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-700 font-semibold">{r.last.toFixed(4)}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded-full ${r.pct > 0 ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600'}`}>
+                      {r.pct > 0 ? '+' : ''}{r.pct.toFixed(1)}%
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

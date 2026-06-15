@@ -488,7 +488,6 @@ export async function analyzeImportData(
     const isNew = meta.category === 'Batch' ? !dbBatchSet.has(sku) : !dbMealSet.has(sku)
     const existingRecs = existingRecipes.get(sku) ?? []
     const activeRec = existingRecs.find((r: any) => r.is_active) ?? null
-    const maxVersion = existingRecs.length > 0 ? Math.max(...existingRecs.map((r: any) => r.version)) : 0
 
     const dbProd = dbProductMap.get(sku)
     const sellPrice = dbProd ? dbProd.price : meta.sell_price

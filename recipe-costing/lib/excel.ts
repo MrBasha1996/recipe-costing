@@ -197,9 +197,9 @@ export async function downloadPurchasesTemplate(): Promise<void> {
     'التاريخ (YYYY-MM-DD)': '2026-06-01', 'اسم المورد': 'شركة الأغذية',
     'SKU المادة': 'sk-0001', 'اسم المادة': 'كبدة معلاق',
     'الكمية': 10, 'الوحدة': 'كيلو',
-    'إجمالي الفاتورة (ريال)': 400, 'تكلفة/وحدة الوصفة (ريال)': 0.04,
+    'إجمالي الفاتورة بدون ضريبة (ريال)': 400, 'تكلفة/وحدة الوصفة بدون ضريبة (ريال)': 0.04,
   }])
-  ws['!cols'] = [{ wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 22 }, { wch: 24 }]
+  ws['!cols'] = [{ wch: 18 }, { wch: 20 }, { wch: 12 }, { wch: 25 }, { wch: 10 }, { wch: 10 }, { wch: 30 }, { wch: 32 }]
   X.utils.book_append_sheet(wb, ws, 'المشتريات')
   X.writeFile(wb, 'قالب_المشتريات.xlsx')
 }
@@ -216,7 +216,7 @@ export function parsePurchasesFile(file: File): Promise<PurchaseRow[]> {
         const rows: any[] = X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]])
         resolve(
           rows
-            .filter(r => r['اسم المادة'] && r['إجمالي الفاتورة (ريال)'])
+            .filter(r => r['اسم المادة'] && (r['إجمالي الفاتورة بدون ضريبة (ريال)'] || r['إجمالي الفاتورة (ريال)']))
             .map(r => ({
               purchase_date: String(r['التاريخ (YYYY-MM-DD)'] ?? '').trim(),
               supplier_name: String(r['اسم المورد'] ?? '').trim(),
@@ -224,8 +224,8 @@ export function parsePurchasesFile(file: File): Promise<PurchaseRow[]> {
               ing_name: String(r['اسم المادة'] ?? '').trim(),
               qty: parseFloat(r['الكمية']) || 0,
               unit: String(r['الوحدة'] ?? '').trim(),
-              total_price: parseFloat(r['إجمالي الفاتورة (ريال)']) || 0,
-              unit_cost: parseFloat(r['تكلفة/وحدة الوصفة (ريال)']) || 0,
+              total_price: parseFloat(r['إجمالي الفاتورة بدون ضريبة (ريال)'] ?? r['إجمالي الفاتورة (ريال)']) || 0,
+              unit_cost: parseFloat(r['تكلفة/وحدة الوصفة بدون ضريبة (ريال)'] ?? r['تكلفة/وحدة الوصفة (ريال)']) || 0,
             }))
             .filter(r => r.ing_name && r.total_price > 0)
         )

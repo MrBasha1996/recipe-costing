@@ -149,6 +149,7 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
         await (supabase.from('stock_movements') as any).insert({
           brand_id: brand, ing_sku: selectedIng.sku, ing_name: selectedIng.name,
           movement_type: 'waste', qty,
+          value: Math.round(qty * (selectedIng.cost ?? 0) * 10000) / 10000,
           note: `هدر: ${WASTE_LABELS[form.waste_type]}${form.reason ? ` — ${form.reason}` : ''}`,
           performed_by: profile?.id ?? null,
         })
@@ -368,7 +369,7 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
                       ))}
                       <button type="button" onClick={() => { setForm(f => ({ ...f, product_name: ingSearch })); setIngSearch('') }}
                         className="w-full text-right px-3 py-2 text-xs text-gray-400 hover:bg-gray-50 border-t border-gray-100">
-                        + إدخال "{ingSearch}" يدوياً
+                        + إدخال &quot;{ingSearch}&quot; يدوياً
                       </button>
                     </div>
                   )}
@@ -376,7 +377,7 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
               )}
               {!selectedIng && form.product_name && !ingSearch && (
                 <div className="mt-1 text-xs text-amber-600 flex items-center gap-1">
-                  <span>⚠</span><span>"{form.product_name}" — إدخال يدوي</span>
+                  <span>⚠</span><span>&quot;{form.product_name}&quot; — إدخال يدوي</span>
                   <button type="button" onClick={() => setForm(f => ({ ...f, product_name: '' }))} className="text-gray-400 hover:text-red-500 mr-1">✕</button>
                 </div>
               )}

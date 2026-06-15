@@ -40,130 +40,25 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient()
 
-  // ── 1. Fetch all purchases for this batch with ing_sku ────────────
-  const { data: purchases, error: pErr } = await (admin.from('purchases') as any)
-    .select('ing_sku, ing_name, qty, unit, unit_cost')
-    .eq('brand_id', brand_id)
-    .eq('import_batch', import_batch)
-    .not('ing_sku', 'is', null)
-    .gt('unit_cost', 0)
+  // ── 1. Atomic WAC: حساب وتطبيق المتوسط المرجّح بـ SELECT FOR UPDATE ──
+  const { data: wacResult, error: wacErr } = await (admin as any).rpc('apply_purchase_wac', {
+    p_brand_id:     brand_id,
+    p_import_batch: import_batch,
+    p_performed_by: performed_by ?? null,
+  })
 
-  if (pErr) return NextResponse.json({ error: pErr.message }, { status: 500 })
-  if (!purchases?.length) return NextResponse.json({ updated: 0 })
+  if (wacErr) return NextResponse.json({ error: wacErr.message }, { status: 500 })
 
-  // Aggregate purchases per SKU (same ingredient may appear multiple times)
-  const purchaseMap = new Map<string, { name: string; qty: number; total_value: number; unit: string }>()
-  for (const p of purchases as any[]) {
-    const existing = purchaseMap.get(p.ing_sku)
-    if (existing) {
-      existing.qty += p.qty
-      existing.total_value += p.qty * p.unit_cost
-    } else {
-      purchaseMap.set(p.ing_sku, {
-        name: p.ing_name,
-        qty: p.qty,
-        total_value: p.qty * p.unit_cost,
-        unit: p.unit,
-      })
-    }
-  }
+  const wac = wacResult as { ok: boolean; updated: number; stock_updated: number; price_history: number; changed_ingredients: { sku: string; new_cost: number }[] }
 
-  const skus = [...purchaseMap.keys()]
+  if (!wac?.ok) return NextResponse.json({ updated: 0, stock_updated: 0, price_history: 0, recipes_updated: 0 })
 
-  // ── 2. Fetch current stock quantities ─────────────────────────────
-  const { data: stockRows } = await (admin.from('stock_items') as any)
-    .select('ing_sku, current_qty, min_qty')
-    .eq('brand_id', brand_id)
-    .in('ing_sku', skus)
+  const ingredientUpdates = wac.changed_ingredients ?? []
 
-  const stockMap = new Map<string, { qty: number; min_qty: number }>()
-  for (const s of (stockRows || []) as any[]) {
-    stockMap.set(s.ing_sku, { qty: s.current_qty ?? 0, min_qty: s.min_qty ?? 0 })
-  }
-
-  // ── 3. Fetch current ingredient costs ────────────────────────────
-  const { data: ingRows } = await (admin.from('ingredients') as any)
-    .select('sku, name, cost')
-    .eq('brand_id', brand_id)
-    .in('sku', skus)
-
-  const costMap = new Map<string, { name: string; cost: number }>()
-  for (const i of (ingRows || []) as any[]) {
-    costMap.set(i.sku, { name: i.name, cost: i.cost ?? 0 })
-  }
-
-  // ── 4. Calculate WAC and prepare updates ─────────────────────────
-  const ingredientUpdates: { sku: string; newCost: number }[] = []
-  const priceHistoryRows: any[] = []
-  const stockUpserts: any[] = []
-  const now = new Date().toISOString()
-
-  for (const [sku, purchase] of purchaseMap) {
-    const currentStock = stockMap.get(sku)?.qty ?? 0
-    const currentCost = costMap.get(sku)?.cost ?? 0
-    const ingName = costMap.get(sku)?.name ?? purchase.name
-    const purchaseUnitCost = purchase.total_value / purchase.qty
-
-    // WAC formula
-    const newCost = currentStock > 0
-      ? (currentStock * currentCost + purchase.qty * purchaseUnitCost) / (currentStock + purchase.qty)
-      : purchaseUnitCost
-
-    const roundedNewCost = Math.round(newCost * 10000) / 10000
-
-    // Only update if cost actually changed
-    if (Math.abs(roundedNewCost - currentCost) > 0.0001) {
-      ingredientUpdates.push({ sku, newCost: roundedNewCost })
-
-      priceHistoryRows.push({
-        brand_id,
-        sku,
-        item_name: ingName,
-        item_type: 'ingredient',
-        old_price: currentCost,
-        new_price: roundedNewCost,
-        changed_by: performed_by ?? null,
-        changed_at: now,
-      })
-    }
-
-    // Always upsert stock_items (add purchased quantity)
-    stockUpserts.push({
-      brand_id,
-      ing_sku: sku,
-      ing_name: ingName,
-      unit: purchase.unit,
-      current_qty: Math.max(0, currentStock) + purchase.qty,
-      min_qty: stockMap.get(sku)?.min_qty ?? 0,
-      updated_at: now,
-    })
-  }
-
-  // ── 5. Apply updates ──────────────────────────────────────────────
-
-  // Update ingredient costs (one at a time — no bulk update in PostgREST)
-  for (const { sku, newCost } of ingredientUpdates) {
-    await (admin.from('ingredients') as any)
-      .update({ cost: newCost })
-      .eq('sku', sku)
-      .eq('brand_id', brand_id)
-  }
-
-  // Record price history
-  if (priceHistoryRows.length > 0) {
-    await (admin.from('price_history') as any).insert(priceHistoryRows)
-  }
-
-  // Upsert stock quantities
-  if (stockUpserts.length > 0) {
-    await (admin.from('stock_items') as any)
-      .upsert(stockUpserts, { onConflict: 'brand_id,ing_sku' })
-  }
-
-  // ── 6. Cascade: recalculate recipe costs for affected recipes ────────
+  // ── 2. Cascade: recalculate recipe costs for affected recipes ────────
   let recipesUpdated = 0
   if (ingredientUpdates.length > 0) {
-    const changedSkus = ingredientUpdates.map(u => u.sku)
+    const changedSkus = ingredientUpdates.map((u: any) => u.sku)
 
     // Find recipe_ids that use any of the changed ingredients
     const { data: affected } = await (admin.from('recipe_ingredients') as any)
@@ -175,11 +70,11 @@ export async function POST(request: NextRequest) {
 
     if (recipeIds.length > 0) {
       // Update unit_cost snapshots in recipe_ingredients for changed SKUs
-      for (const { sku, newCost } of ingredientUpdates) {
+      for (const u of ingredientUpdates as any[]) {
         await (admin.from('recipe_ingredients') as any)
-          .update({ unit_cost: newCost })
+          .update({ unit_cost: u.new_cost })
           .eq('brand_id', brand_id)
-          .eq('ing_sku', sku)
+          .eq('ing_sku', u.sku)
           .in('recipe_id', recipeIds)
       }
 
@@ -191,7 +86,7 @@ export async function POST(request: NextRequest) {
 
       // Fetch recipe details needed for FC% and margin
       const { data: recipeDetails } = await (admin.from('recipes') as any)
-        .select('id, yield_portions, sell_price, app_price')
+        .select('id, product_sku, yield_portions, sell_price, app_price')
         .eq('brand_id', brand_id)
         .eq('is_active', true)
         .in('id', recipeIds)
@@ -202,6 +97,9 @@ export async function POST(request: NextRequest) {
         if (!riByRecipe.has(row.recipe_id)) riByRecipe.set(row.recipe_id, [])
         riByRecipe.get(row.recipe_id)!.push(row)
       }
+
+      // product_sku → per-portion cost (built during recipe loop, used for combo cascade)
+      const productCostMap = new Map<string, number>()
 
       for (const recipe of (recipeDetails || []) as any[]) {
         const rows = riByRecipe.get(recipe.id) ?? []
@@ -232,6 +130,8 @@ export async function POST(request: NextRequest) {
 
         const R = (v: number) => Math.round(v * 10000) / 10000
 
+        if (recipe.product_sku) productCostMap.set(recipe.product_sku, perPortion)
+
         await (admin.from('recipes') as any)
           .update({
             total_cost:    R(mainCost),
@@ -248,14 +148,73 @@ export async function POST(request: NextRequest) {
 
         recipesUpdated++
       }
+
+      // ── 7. Cascade: recalculate combo costs ──────────────────────
+      if (productCostMap.size > 0) {
+        const affectedProductSkus = [...productCostMap.keys()]
+
+        const { data: affectedItems } = await (admin.from('combo_meal_items') as any)
+          .select('id, combo_id, product_sku, qty')
+          .eq('brand_id', brand_id)
+          .in('product_sku', affectedProductSkus)
+
+        if (affectedItems && (affectedItems as any[]).length > 0) {
+          for (const item of affectedItems as any[]) {
+            const newUnitCost = Math.round((productCostMap.get(item.product_sku) ?? 0) * 10000) / 10000
+            await (admin.from('combo_meal_items') as any)
+              .update({ unit_cost: newUnitCost, total_cost: Math.round(newUnitCost * item.qty * 10000) / 10000 })
+              .eq('id', item.id)
+          }
+
+          const comboIds = [...new Set((affectedItems as any[]).map((i: any) => i.combo_id as string))]
+
+          const [{ data: allComboItems }, { data: combos }] = await Promise.all([
+            (admin.from('combo_meal_items') as any)
+              .select('combo_id, unit_cost, qty')
+              .eq('brand_id', brand_id)
+              .in('combo_id', comboIds),
+            (admin.from('combo_meals') as any)
+              .select('id, price, app_price')
+              .eq('brand_id', brand_id)
+              .in('id', comboIds),
+          ])
+
+          const itemsByCombo = new Map<string, any[]>()
+          for (const item of (allComboItems || []) as any[]) {
+            if (!itemsByCombo.has(item.combo_id)) itemsByCombo.set(item.combo_id, [])
+            itemsByCombo.get(item.combo_id)!.push(item)
+          }
+
+          for (const combo of (combos || []) as any[]) {
+            const items = itemsByCombo.get(combo.id) ?? []
+            const totalCost = Math.round(
+              items.reduce((s: number, i: any) => s + (i.unit_cost ?? 0) * (i.qty ?? 1), 0) * 10000
+            ) / 10000
+            const sellExVat = (combo.price ?? 0) / 1.15
+            const appExVat  = combo.app_price != null ? combo.app_price / 1.15 : null
+            const fcPct     = sellExVat > 0 ? Math.round((totalCost / sellExVat) * 1000) / 10 : 0
+            const margin    = Math.round((sellExVat - totalCost) * 100) / 100
+            const marginApp = appExVat != null ? Math.round((appExVat - totalCost) * 100) / 100 : null
+
+            await (admin.from('combo_meals') as any)
+              .update({
+                total_cost: totalCost,
+                food_cost_pct: fcPct,
+                margin,
+                ...(marginApp != null ? { margin_app: marginApp } : {}),
+              })
+              .eq('id', combo.id)
+          }
+        }
+      }
     }
   }
 
   return NextResponse.json({
     ok: true,
-    updated: ingredientUpdates.length,
-    stock_updated: stockUpserts.length,
-    price_history: priceHistoryRows.length,
+    updated:         wac.updated,
+    stock_updated:   wac.stock_updated,
+    price_history:   wac.price_history,
     recipes_updated: recipesUpdated,
   })
 }

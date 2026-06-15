@@ -103,7 +103,7 @@ export async function POST(request: NextRequest) {
 
       const compRecipeIds = [...compRecipeMap.values()].map(r => r.id)
 
-      let compIngsByRecipeId = new Map<string, any[]>()
+      const compIngsByRecipeId = new Map<string, any[]>()
       if (compRecipeIds.length > 0) {
         const { data: compIngs } = await (admin.from('recipe_ingredients') as any)
           .select('recipe_id, ing_sku, ing_name, qty, yield_pct, unit, is_semi')

@@ -37,7 +37,6 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
       is_base: false,
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const db = supabase.from('products') as any
     const { error: dbErr } = isEdit
       ? await db.update(payload).eq('sku', product!.sku).eq('brand_id', brand)

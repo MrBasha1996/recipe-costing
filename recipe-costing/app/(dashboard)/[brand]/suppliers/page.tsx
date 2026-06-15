@@ -79,6 +79,27 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
   const [form, setForm] = useState({ name: '', phone: '', contact_person: '', notes: '' })
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [purchaseTotals, setPurchaseTotals] = useState<Map<string, { total: number; count: number }>>(new Map())
+
+  useEffect(() => {
+    const load = async () => {
+      const supabase = createClient()
+      const since = new Date()
+      since.setFullYear(since.getFullYear() - 2)
+      const { data } = await (supabase.from('purchases') as any)
+        .select('supplier_name, total_price')
+        .eq('brand_id', brand)
+        .gte('purchase_date', since.toISOString().slice(0, 10))
+      if (!data) return
+      const map = new Map<string, { total: number; count: number }>()
+      for (const r of data as any[]) {
+        const ex = map.get(r.supplier_name) ?? { total: 0, count: 0 }
+        map.set(r.supplier_name, { total: ex.total + (r.total_price ?? 0), count: ex.count + 1 })
+      }
+      setPurchaseTotals(map)
+    }
+    load()
+  }, [brand])
 
   function openNew() {
     setForm({ name: '', phone: '', contact_person: '', notes: '' })
@@ -188,6 +209,7 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
                 <th className="text-right px-4 py-3 font-medium">اسم المورد</th>
                 <th className="text-right px-4 py-3 font-medium">الجوال</th>
                 <th className="text-right px-4 py-3 font-medium">المسؤول</th>
+                <th className="text-center px-4 py-3 font-medium">إجمالي المشتريات</th>
                 <th className="text-right px-4 py-3 font-medium">ملاحظات</th>
                 {canE && <th className="px-4 py-3 font-medium text-center">إجراءات</th>}
               </tr>
@@ -198,6 +220,17 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
                   <td className="px-4 py-3 font-medium text-gray-900">{s.name}</td>
                   <td className="px-4 py-3 font-mono text-gray-600 text-xs">{s.phone ?? '—'}</td>
                   <td className="px-4 py-3 text-gray-600 text-xs">{s.contact_person ?? '—'}</td>
+                  <td className="px-4 py-3 text-center">
+                    {(() => {
+                      const pt = purchaseTotals.get(s.name)
+                      return pt ? (
+                        <div>
+                          <span className="font-mono font-semibold text-blue-700 text-xs">{pt.total.toFixed(0)} ر.س</span>
+                          <span className="text-[10px] text-gray-400 block">{pt.count} فاتورة</span>
+                        </div>
+                      ) : <span className="text-gray-300 text-xs">—</span>
+                    })()}
+                  </td>
                   <td className="px-4 py-3 text-gray-400 text-xs">{s.notes ?? '—'}</td>
                   {canE && (
                     <td className="px-4 py-3 text-center">
@@ -212,6 +245,19 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
                 </tr>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 border-t-2 border-gray-200">
+                <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-gray-700 text-right">
+                  الإجمالي الكلي للمشتريات (آخر سنتين)
+                </td>
+                <td className="px-4 py-3 text-center">
+                  <span className="font-mono font-bold text-blue-700">
+                    {[...purchaseTotals.values()].reduce((s, v) => s + v.total, 0).toFixed(0)} ر.س
+                  </span>
+                </td>
+                <td colSpan={canE ? 2 : 1} />
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}

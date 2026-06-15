@@ -1953,7 +1953,7 @@ function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcL
     return (
       <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center">
         <p className="text-amber-800 font-semibold text-sm">هذه الميزة تتطلب صلاحية الوصول لجميع البراندات</p>
-        <p className="text-amber-600 text-xs mt-1">تواصل مع مدير النظام للحصول على صلاحية "الكل"</p>
+        <p className="text-amber-600 text-xs mt-1">تواصل مع مدير النظام للحصول على صلاحية &quot;الكل&quot;</p>
       </div>
     )
   }

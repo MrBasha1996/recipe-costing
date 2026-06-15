@@ -797,7 +797,7 @@ export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: Br
               </div>
             </div>
             <div className="pt-1 text-xs text-gray-400 border-t border-gray-200">
-              💡 نفس "اسم الإصدار" + نفس "SKU {mode === 'batch' ? 'الباتش' : 'المنتج'}" = وصفة واحدة.
+              💡 نفس &quot;اسم الإصدار&quot; + نفس &quot;SKU {mode === 'batch' ? 'الباتش' : 'المنتج'}&quot; = وصفة واحدة.
               {mode === 'batch' && ' الملف يقبل فقط صفوف من نوع Batch.'}
               {mode === 'meal' && ' الملف يقبل فقط صفوف من نوع Meal.'}
             </div>

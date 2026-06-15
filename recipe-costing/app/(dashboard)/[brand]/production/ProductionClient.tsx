@@ -51,7 +51,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
   const { canEdit, profile } = useUserStore()
   const canE = canEdit('production')
 
-  const [tab, setTab] = useState<'new' | 'sessions'>('new')
+  const [tab, setTab] = useState<'new' | 'sessions' | 'cost-analysis'>('new')
 
   // ── Tab A: New production ─────────────────────────────────────────
 
@@ -333,6 +333,14 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
           {draftCount > 0 && (
             <span className="mr-2 bg-amber-500 text-white text-xs rounded-full px-1.5 py-0.5">{draftCount}</span>
           )}
+        </button>
+        <button
+          onClick={() => setTab('cost-analysis')}
+          className={`px-5 py-2 text-sm font-medium rounded-lg transition-colors ${
+            tab === 'cost-analysis' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          تحليل التكلفة
         </button>
       </div>
 
@@ -722,6 +730,184 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
         </div>
       )}
 
+      {tab === 'cost-analysis' && <CostAnalysisTab brand={brand} />}
+
+    </div>
+  )
+}
+
+// ── Cost Analysis Tab ─────────────────────────────────────────────
+
+interface CostRow {
+  id: string; batch_name: string; batch_sku: string
+  qty_portions: number; approved_at: string
+  estimate: number; actual: number
+}
+
+function CostAnalysisTab({ brand }: { brand: BrandId }) {
+  const [rows, setRows]       = useState<CostRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [months, setMonths]   = useState(3)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const since = new Date()
+    since.setMonth(since.getMonth() - months)
+
+    const [{ data: sessions }, { data: movements }] = await Promise.all([
+      (supabase.from('production_sessions') as any)
+        .select('id, batch_sku, batch_name, qty_portions, approved_at, actuals_json')
+        .eq('brand_id', brand)
+        .eq('status', 'approved')
+        .not('actuals_json', 'is', null)
+        .gte('approved_at', since.toISOString())
+        .order('approved_at', { ascending: false }),
+      (supabase.from('stock_movements') as any)
+        .select('production_session_id, value')
+        .eq('brand_id', brand)
+        .eq('movement_type', 'out')
+        .not('production_session_id', 'is', null)
+        .gte('created_at', since.toISOString()),
+    ])
+
+    // Sum actual costs per session
+    const actualMap = new Map<string, number>()
+    for (const m of (movements ?? []) as any[]) {
+      if (!m.production_session_id) continue
+      actualMap.set(m.production_session_id, (actualMap.get(m.production_session_id) ?? 0) + (m.value ?? 0))
+    }
+
+    const result: CostRow[] = ((sessions ?? []) as any[])
+      .filter((s: any) => s.actuals_json?.batch_value != null)
+      .map((s: any) => ({
+        id:           s.id,
+        batch_name:   s.batch_name,
+        batch_sku:    s.batch_sku,
+        qty_portions: s.qty_portions,
+        approved_at:  s.approved_at,
+        estimate:     s.actuals_json.batch_value ?? 0,
+        actual:       actualMap.get(s.id) ?? 0,
+      }))
+
+    setRows(result)
+    setLoading(false)
+  }, [brand, months])
+
+  useEffect(() => { load() }, [load])
+
+  const totalEstimate = rows.reduce((s, r) => s + r.estimate, 0)
+  const totalActual   = rows.reduce((s, r) => s + r.actual, 0)
+  const avgVariancePct = rows.length > 0
+    ? rows.filter(r => r.estimate > 0).reduce((s, r) => s + ((r.actual - r.estimate) / r.estimate) * 100, 0) / rows.filter(r => r.estimate > 0).length
+    : 0
+
+  if (loading) return <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-4">
+      {/* Period selector */}
+      <div className="flex items-center gap-3">
+        <span className="text-sm text-gray-500">الفترة:</span>
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[1, 3, 6].map(n => (
+            <button key={n} onClick={() => setMonths(n)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${months === n ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {n === 1 ? 'شهر' : `${n} أشهر`}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium">إجمالي التقدير</p>
+          <p className="text-xl font-bold text-gray-700 font-mono mt-1">{totalEstimate.toFixed(2)} <span className="text-sm font-normal">ر.س</span></p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs text-gray-500 font-medium">إجمالي الفعلي</p>
+          <p className="text-xl font-bold text-blue-700 font-mono mt-1">{totalActual.toFixed(2)} <span className="text-sm font-normal">ر.س</span></p>
+        </div>
+        <div className={`border rounded-xl p-4 ${avgVariancePct > 10 ? 'bg-red-50 border-red-100' : avgVariancePct > 0 ? 'bg-amber-50 border-amber-100' : 'bg-green-50 border-green-100'}`}>
+          <p className="text-xs text-gray-500 font-medium">متوسط الانحراف</p>
+          <p className={`text-xl font-bold font-mono mt-1 ${avgVariancePct > 10 ? 'text-red-700' : avgVariancePct > 0 ? 'text-amber-700' : 'text-green-700'}`}>
+            {avgVariancePct > 0 ? '+' : ''}{avgVariancePct.toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400 text-sm">
+          لا توجد جلسات معتمدة في هذه الفترة تحتوي على بيانات تكلفة
+        </div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-400 border-b border-gray-100 bg-gray-50">
+                <th className="text-right px-4 py-3 font-medium">الباتش</th>
+                <th className="text-center px-4 py-3 font-medium">الحصص</th>
+                <th className="text-center px-4 py-3 font-medium">تاريخ الاعتماد</th>
+                <th className="text-center px-4 py-3 font-medium">التقدير</th>
+                <th className="text-center px-4 py-3 font-medium">الفعلي</th>
+                <th className="text-center px-4 py-3 font-medium">الفرق</th>
+                <th className="text-center px-4 py-3 font-medium">% الانحراف</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(r => {
+                const diff    = r.actual - r.estimate
+                const diffPct = r.estimate > 0 ? (diff / r.estimate) * 100 : 0
+                const isOver  = diff > 0
+                return (
+                  <tr key={r.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                    <td className="px-4 py-2.5">
+                      <span className="font-medium text-gray-900">{r.batch_name}</span>
+                      <span className="text-[10px] text-gray-400 block font-mono">{r.batch_sku}</span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700">{r.qty_portions}</td>
+                    <td className="px-4 py-2.5 text-center text-xs text-gray-500">
+                      {new Date(r.approved_at).toLocaleDateString('ar-SA')}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-600">{r.estimate.toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-xs font-semibold text-blue-700">{r.actual.toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-xs">
+                      <span className={diff === 0 ? 'text-gray-400' : isOver ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}>
+                        {diff > 0 ? '+' : ''}{diff.toFixed(2)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {r.estimate > 0 ? (
+                        <span className={`text-xs font-bold font-mono px-2 py-0.5 rounded-full ${
+                          Math.abs(diffPct) < 3 ? 'bg-green-50 text-green-600'
+                          : isOver ? 'bg-red-50 text-red-600'
+                          : 'bg-blue-50 text-blue-600'
+                        }`}>
+                          {diffPct > 0 ? '+' : ''}{diffPct.toFixed(1)}%
+                        </span>
+                      ) : <span className="text-gray-400 text-xs">—</span>}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-50 border-t-2 border-gray-200">
+                <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-gray-700 text-right">الإجمالي</td>
+                <td className="px-4 py-3 font-mono text-xs text-center text-gray-600">{totalEstimate.toFixed(2)}</td>
+                <td className="px-4 py-3 font-mono text-xs text-center font-bold text-blue-700">{totalActual.toFixed(2)}</td>
+                <td className="px-4 py-3 font-mono text-xs text-center font-semibold">
+                  <span className={totalActual - totalEstimate > 0 ? 'text-red-600' : 'text-green-600'}>
+                    {totalActual - totalEstimate > 0 ? '+' : ''}{(totalActual - totalEstimate).toFixed(2)}
+                  </span>
+                </td>
+                <td />
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
     </div>
   )
 }

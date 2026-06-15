@@ -247,7 +247,7 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {monthlyHistory.map((m, i) => {
+                      {monthlyHistory.map((m) => {
                         const [y, mo] = m.year_month.split('-')
                         const label = new Date(Number(y), Number(mo) - 1).toLocaleDateString('ar-SA', {
                           month: 'long', year: 'numeric',

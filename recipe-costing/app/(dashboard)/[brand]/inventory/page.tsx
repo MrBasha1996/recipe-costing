@@ -6,7 +6,7 @@ import type { StockMovement } from '@/types'
 interface InventoryItem {
   sku: string; name: string; unit: string; type: 'ingredient' | 'batch'
   stock_id: string | null; current_qty: number; min_qty: number
-  expiry_date: string | null; batch_number: string | null
+  expiry_date: string | null; batch_number: string | null; cost: number; category?: string
 }
 
 function stockStatus(item: InventoryItem): 'ok' | 'low' | 'empty' {
@@ -21,7 +21,7 @@ export default async function InventoryPage({ params }: { params: Promise<{ bran
   const supabase = await createClient()
 
   const [{ data: ings }, { data: batches }, { data: stockRows }, { data: moves }] = await Promise.all([
-    (supabase.from('ingredients') as any).select('sku, name, unit').eq('brand_id', brand),
+    (supabase.from('ingredients') as any).select('sku, name, unit, cost, category').eq('brand_id', brand),
     (supabase.from('batches') as any).select('sku, name, unit').eq('brand_id', brand),
     (supabase.from('stock_items') as any).select('id, ing_sku, current_qty, min_qty, expiry_date, batch_number').eq('brand_id', brand),
     (supabase.from('stock_movements') as any).select('*').eq('brand_id', brand).order('created_at', { ascending: false }).limit(200),
@@ -35,11 +35,11 @@ export default async function InventoryPage({ params }: { params: Promise<{ bran
   const merged: InventoryItem[] = [
     ...((ings || []) as any[]).map((i: any) => {
       const s = stockMap.get(i.sku)
-      return { sku: i.sku, name: i.name, unit: i.unit ?? '—', type: 'ingredient' as const, stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0, expiry_date: s?.expiry_date ?? null, batch_number: s?.batch_number ?? null }
+      return { sku: i.sku, name: i.name, unit: i.unit ?? '—', type: 'ingredient' as const, stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0, expiry_date: s?.expiry_date ?? null, batch_number: s?.batch_number ?? null, cost: i.cost ?? 0, category: i.category ?? undefined }
     }),
     ...((batches || []) as any[]).map((b: any) => {
       const s = stockMap.get(b.sku)
-      return { sku: b.sku, name: b.name, unit: b.unit ?? '—', type: 'batch' as const, stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0, expiry_date: s?.expiry_date ?? null, batch_number: s?.batch_number ?? null }
+      return { sku: b.sku, name: b.name, unit: b.unit ?? '—', type: 'batch' as const, stock_id: s?.id ?? null, current_qty: s?.current_qty ?? 0, min_qty: s?.min_qty ?? 0, expiry_date: s?.expiry_date ?? null, batch_number: s?.batch_number ?? null, cost: 0 }
     }),
   ]
 

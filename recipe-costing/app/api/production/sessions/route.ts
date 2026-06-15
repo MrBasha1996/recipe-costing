@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     if (s.approved_by)  userIds.add(s.approved_by)
   }
 
-  let usersMap: Record<string, string> = {}
+  const usersMap: Record<string, string> = {}
   if (userIds.size > 0) {
     const { data: users } = await (admin.from('user_profiles') as any)
       .select('id, name_ar').in('id', Array.from(userIds))

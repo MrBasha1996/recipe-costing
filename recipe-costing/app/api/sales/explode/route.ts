@@ -265,66 +265,53 @@ export async function POST(request: NextRequest) {
     stockMap.set(s.ing_sku, { id: s.id, current_qty: s.current_qty, min_qty: s.min_qty, unit: s.unit })
   }
 
-  // ── 7. Upsert stock_items + insert movements ──────────────────────
-  const upsertRows: any[] = []
+  // ── 7. Build write payloads ───────────────────────────────────────
+  const stockUpserts: any[] = []
   const movementRows: any[] = []
   const note = `خصم تلقائي — دفعة ${import_batch.slice(0, 8)}`
 
   for (const [sku, { name, qty }] of deductMap) {
     const stock = stockMap.get(sku)
-    const currentQty = stock?.current_qty ?? 0
-    const newQty = Math.max(0, currentQty - qty)
-
-    upsertRows.push({
-      brand_id,
+    stockUpserts.push({
       ing_sku:     sku,
       ing_name:    name,
       unit:        stock?.unit ?? '—',
-      current_qty: newQty,
+      current_qty: Math.max(0, (stock?.current_qty ?? 0) - qty),
       min_qty:     stock?.min_qty ?? 0,
-      updated_at:  new Date().toISOString(),
     })
-
     movementRows.push({
-      brand_id,
-      ing_sku:       sku,
-      ing_name:      name,
-      movement_type: 'out',
-      qty:           Math.round(qty * 1000) / 1000,
+      ing_sku:      sku,
+      ing_name:     name,
+      qty:          Math.round(qty * 1000) / 1000,
       note,
-      performed_by: performed_by ?? null,
+      performed_by: performed_by ?? '',
     })
   }
 
-  const { error: upsertErr } = await (admin.from('stock_items') as any)
-    .upsert(upsertRows, { onConflict: 'brand_id,ing_sku' })
-
-  if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 })
-
-  await (admin.from('stock_movements') as any).insert(movementRows)
-
-  await (admin.from('daily_sales') as any)
-    .update({ exploded_at: new Date().toISOString() })
-    .eq('brand_id', brand_id)
-    .eq('import_batch', import_batch)
-
-  // ── 8. حساب وحفظ التكلفة لكل سجل مبيعات ─────────────────────────
-  // المنتجات العادية: cost = (total_cost / yield_portions) * qty_sold
-  // الكومبو:         cost = combo.total_cost * qty_sold
-  // سجلات بلا وصفة معتمدة أو كومبو → cost يبقى NULL
+  // ── 8. Build per-sale cost payload ────────────────────────────────
+  const saleCosts: any[] = []
   for (const row of (sales as any[])) {
     const recipe = recipeMap.get(row.product_sku)
     if (recipe) {
-      const cost = Math.round((recipe.total_cost / recipe.yield_portions) * row.qty_sold * 10000) / 10000
-      await (admin.from('daily_sales') as any).update({ cost }).eq('id', row.id)
+      saleCosts.push({ id: row.id, cost: Math.round((recipe.total_cost / recipe.yield_portions) * row.qty_sold * 10000) / 10000 })
       continue
     }
     const combo = comboMap.get(row.product_sku)
     if (combo) {
-      const cost = Math.round(combo.total_cost * row.qty_sold * 10000) / 10000
-      await (admin.from('daily_sales') as any).update({ cost }).eq('id', row.id)
+      saleCosts.push({ id: row.id, cost: Math.round(combo.total_cost * row.qty_sold * 10000) / 10000 })
     }
   }
+
+  // ── 9. Atomic write via RPC ───────────────────────────────────────
+  const { error: rpcErr } = await (admin as any).rpc('apply_explode_writes', {
+    p_brand_id:      brand_id,
+    p_import_batch:  import_batch,
+    p_stock_upserts: stockUpserts,
+    p_movements:     movementRows,
+    p_sale_costs:    saleCosts,
+  })
+
+  if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 })
 
   return NextResponse.json({
     ok: true,

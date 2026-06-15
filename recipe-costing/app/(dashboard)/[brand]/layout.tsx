@@ -35,7 +35,7 @@ export default async function DashboardLayout({
 
   const isSuperAdmin = (profile.roles as any)?.is_super_admin === true
   const roleName: string | null = (profile.roles as any)?.name ?? null
-  let initialPermissions: PermissionsMap = {}
+  const initialPermissions: PermissionsMap = {}
 
   if (!isSuperAdmin && profile.role_id) {
     const { data: rp } = await (supabase as any)
