@@ -42,7 +42,7 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
       ? await db.update(payload).eq('sku', product!.sku).eq('brand_id', brand)
       : await db.insert(payload)
 
-    if (dbErr) { setError(dbErr.message); setSaving(false); return }
+    if (dbErr) { setError('حدث خطأ أثناء الحفظ. تأكد من البيانات وأعد المحاولة.'); setSaving(false); return }
     onSaved()
   }
 

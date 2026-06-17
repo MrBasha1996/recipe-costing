@@ -5,6 +5,7 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { usePermissionsStore } from '@/stores/permissionsStore'
 import type { BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface Branch {
   id: string
@@ -28,6 +29,7 @@ export default function BranchesPage() {
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const { hasPermission, isSuperAdmin } = usePermissionsStore()
   const canCreate = isSuperAdmin || hasPermission('branches', 'create')
@@ -86,14 +88,15 @@ export default function BranchesPage() {
     }
   }
 
-  async function handleDelete(b: Branch) {
-    if (!confirm(`حذف فرع "${b.name}"؟`)) return
-    setDeletingId(b.id)
-    const supabase = createClient()
-    const { error: err } = await (supabase.from('branches') as any).delete().eq('id', b.id)
-    if (err) alert('فشل الحذف: ' + err.message)
-    else await load()
-    setDeletingId(null)
+  function handleDelete(b: Branch) {
+    setDlg({ msg: `حذف فرع "${b.name}"؟`, onOk: async () => {
+      setDeletingId(b.id)
+      const supabase = createClient()
+      const { error: err } = await (supabase.from('branches') as any).delete().eq('id', b.id)
+      if (err) setError('فشل الحذف: ' + err.message)
+      else await load()
+      setDeletingId(null)
+    }})
   }
 
   return (
@@ -234,6 +237,7 @@ export default function BranchesPage() {
           </div>
         </div>
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

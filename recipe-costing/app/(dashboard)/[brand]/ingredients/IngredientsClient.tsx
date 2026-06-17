@@ -10,6 +10,7 @@ import PriceImpactModal from '@/components/shared/PriceImpactModal'
 import { downloadPriceTemplate, parsePriceFile } from '@/lib/excel'
 import { exportIngredients, importIngredients, downloadIngredientsTemplate } from '@/lib/dataImportExport'
 import type { Ingredient, BrandId, UnitConversion } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { PriceChange } from '@/lib/excel'
 
 interface Props {
@@ -32,6 +33,7 @@ export default function IngredientsClient({ initialIngredients, initialConversio
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [showUnlinked, setShowUnlinked] = useState(false)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [linkedSkus, setLinkedSkus] = useState<Set<string> | null>(null)
   const [loadingUnlinked, setLoadingUnlinked] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -72,11 +74,12 @@ export default function IngredientsClient({ initialIngredients, initialConversio
   function handleEdit(i: Ingredient) { setEditIngredient(i); setShowForm(true) }
   function handleClose() { setShowForm(false); setEditIngredient(null) }
 
-  async function handleDelete(i: Ingredient) {
-    if (!confirm(`حذف "${i.name}"؟`)) return
-    const supabase = createClient()
-    await supabase.from('ingredients').delete().eq('sku', i.sku).eq('brand_id', i.brand_id)
-    router.refresh()
+  function handleDelete(i: Ingredient) {
+    setDlg({ msg: `حذف "${i.name}"؟`, onOk: async () => {
+      const supabase = createClient()
+      await supabase.from('ingredients').delete().eq('sku', i.sku).eq('brand_id', i.brand_id)
+      router.refresh()
+    }})
   }
 
   async function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -246,6 +249,7 @@ export default function IngredientsClient({ initialIngredients, initialConversio
           onApplied={() => { setPriceChanges(null); router.refresh() }}
         />
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

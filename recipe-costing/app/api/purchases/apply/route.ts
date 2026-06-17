@@ -40,6 +40,24 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient()
 
+  // ── 0. Period close guard ─────────────────────────────────────────
+  const { data: brandRow } = await (admin.from('brands') as any)
+    .select('closed_up_to').eq('id', brand_id).maybeSingle()
+  if (brandRow?.closed_up_to) {
+    const { data: earliestRow } = await (admin.from('purchases') as any)
+      .select('purchase_date').eq('brand_id', brand_id).eq('import_batch', import_batch)
+      .order('purchase_date', { ascending: true }).limit(1).maybeSingle()
+    if (earliestRow?.purchase_date) {
+      const batchYM = (earliestRow.purchase_date as string).slice(0, 7)
+      if (batchYM <= brandRow.closed_up_to) {
+        return NextResponse.json(
+          { error: `الفترة ${batchYM} مُغلقة — لا يمكن تطبيق مشتريات بتاريخ مُغلق` },
+          { status: 423 }
+        )
+      }
+    }
+  }
+
   // ── 1. Atomic WAC: حساب وتطبيق المتوسط المرجّح بـ SELECT FOR UPDATE ──
   const { data: wacResult, error: wacErr } = await (admin as any).rpc('apply_purchase_wac', {
     p_brand_id:     brand_id,
@@ -209,6 +227,20 @@ export async function POST(request: NextRequest) {
       }
     }
   }
+
+  await (admin.from('audit_logs') as any).insert({
+    brand_id,
+    action:       'purchases_applied',
+    entity_type:  'purchase_batch',
+    entity_sku:   import_batch,
+    performed_by: (user as any).id,
+    metadata: {
+      updated:         wac.updated,
+      stock_updated:   wac.stock_updated,
+      price_history:   wac.price_history,
+      recipes_updated: recipesUpdated,
+    },
+  })
 
   return NextResponse.json({
     ok: true,

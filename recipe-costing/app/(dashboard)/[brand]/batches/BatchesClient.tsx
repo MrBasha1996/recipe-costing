@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { exportBatches, importBatches, downloadBatchesTemplate } from '@/lib/dataImportExport'
 import type { BatchProduct, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
 
@@ -20,6 +21,7 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
   const [editing, setEditing] = useState<BatchProduct | null>(null)
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [importing, setImporting] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -80,17 +82,18 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
     }
   }
 
-  async function handleDelete(b: BatchProduct) {
-    if (!window.confirm(`هل تريد حذف "${b.name}"؟ سيتم حذف وصفاته أيضاً.`)) return
-    const supabase = createClient()
-    const { data: recipes } = await (supabase.from('recipes') as any)
-      .select('id').eq('sku', b.sku).eq('brand_id', brand).eq('is_semi', true)
-    for (const rec of recipes || []) {
-      await (supabase.from('recipe_ingredients') as any).delete().eq('recipe_id', rec.id)
-      await (supabase.from('recipes') as any).delete().eq('id', rec.id)
-    }
-    await (supabase.from('batches') as any).delete().eq('sku', b.sku).eq('brand_id', brand)
-    await load()
+  function handleDelete(b: BatchProduct) {
+    setDlg({ msg: `هل تريد حذف "${b.name}"؟ سيتم حذف وصفاته أيضاً.`, onOk: async () => {
+      const supabase = createClient()
+      const { data: recipes } = await (supabase.from('recipes') as any)
+        .select('id').eq('sku', b.sku).eq('brand_id', brand).eq('is_semi', true)
+      for (const rec of recipes || []) {
+        await (supabase.from('recipe_ingredients') as any).delete().eq('recipe_id', rec.id)
+        await (supabase.from('recipes') as any).delete().eq('id', rec.id)
+      }
+      await (supabase.from('batches') as any).delete().eq('sku', b.sku).eq('brand_id', brand)
+      await load()
+    }})
   }
 
   async function handleExport() {
@@ -286,6 +289,7 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
           </table>
         )}
       </div>
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

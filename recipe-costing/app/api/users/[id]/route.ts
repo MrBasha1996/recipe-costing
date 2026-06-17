@@ -60,9 +60,26 @@ export async function DELETE(
   }
 
   const admin = createAdminClient()
+
+  const { data: deletedProfile } = await admin
+    .from('user_profiles')
+    .select('name_ar, brand_access, role_id')
+    .eq('id', id)
+    .maybeSingle()
+
   await admin.from('user_profiles').delete().eq('id', id)
   const { error } = await admin.auth.admin.deleteUser(id)
 
   if (error) return NextResponse.json({ error: error.message }, { status: 400 })
+
+  await (admin.from('rbac_audit_logs') as any).insert({
+    performed_by: caller.id,
+    action:       'user_deleted',
+    entity_type:  'user',
+    entity_id:    id,
+    entity_name:  deletedProfile?.name_ar ?? id,
+    old_data:     deletedProfile ?? null,
+  })
+
   return NextResponse.json({ ok: true })
 }

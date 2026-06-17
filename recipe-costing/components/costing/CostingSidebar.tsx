@@ -7,6 +7,7 @@ import { useUserStore } from '@/stores/userStore'
 import { FC_TARGET, calcServiceCost } from '@/lib/calculations'
 import { qc, cacheKey } from '@/lib/queryCache'
 import { useCostingStore } from '@/stores/costingStore'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { Product, BatchProduct, Recipe, BrandId } from '@/types'
 
 interface Props {
@@ -33,6 +34,7 @@ export default function CostingSidebar({ brand, selectedSku, onSelect, mode }: P
   const [exportingIng, setExportingIng] = useState(false)
   const [recalculating, setRecalculating] = useState(false)
   const [recalcMsg, setRecalcMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   // useSyncExternalStore: الحل الرسمي لاختلاف server/client — لا يُطلق hydration error
   const isClient = useSyncExternalStore(() => () => {}, () => true, () => false)
@@ -194,12 +196,11 @@ export default function CostingSidebar({ brand, selectedSku, onSelect, mode }: P
     }
   }
 
-  async function handleRecalcAll() {
-    // Diagnostic: to find batches with a suspicious cost-per-portion (likely a
-    // yield_portions unit mismatch), run this query in Supabase:
-    // -- SELECT sku, total_cost, yield_portions, total_cost/yield_portions as unit_cost
-    // -- FROM recipes WHERE is_semi=true AND is_active=true ORDER BY total_cost/yield_portions DESC
-    if (!window.confirm(`إعادة احتساب تكاليف جميع وصفات ${mode === 'batches' ? 'الباتش' : 'المنتجات'} النشطة؟`)) return
+  function handleRecalcAll() {
+    setDlg({ msg: `إعادة احتساب تكاليف جميع وصفات ${mode === 'batches' ? 'الباتش' : 'المنتجات'} النشطة؟`, onOk: doRecalcAll })
+  }
+
+  async function doRecalcAll() {
     setRecalculating(true)
     setRecalcMsg(null)
     try {
@@ -500,6 +501,7 @@ export default function CostingSidebar({ brand, selectedSku, onSelect, mode }: P
           </>
         )}
       </div>
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }
@@ -559,7 +561,7 @@ function SidebarItem({
           <span className="text-xs text-gray-300">—</span>
         )}
       </div>
-      {selected && <div className="w-0.5 h-8 bg-gray-800 rounded-full flex-shrink-0 -mr-4 ml-1" />}
+      {selected && <div className="w-0.5 h-8 bg-gray-800 rounded-full flex-shrink-0 -me-4 ms-1" />}
     </button>
   )
 }

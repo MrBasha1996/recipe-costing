@@ -8,6 +8,7 @@ import { usePermissionsStore } from '@/stores/permissionsStore'
 import { downloadPurchasesTemplate, parsePurchasesFile, validatePurchaseRows } from '@/lib/excel'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 type ViewTab = 'import' | 'analytics'
 
@@ -39,6 +40,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
   const [importing, setImporting] = useState(false)
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [deletingBatch, setDeletingBatch] = useState<string | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   useEffect(() => { setBatches(initialBatches) }, [initialBatches])
 
@@ -107,13 +109,14 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
     } finally { setImporting(false) }
   }
 
-  async function handleDeleteBatch(batchId: string) {
-    if (!confirm('حذف هذه الدفعة من سجل المشتريات؟')) return
-    setDeletingBatch(batchId)
-    const supabase = createClient()
-    await (supabase.from('purchases') as any).delete().eq('import_batch', batchId)
-    setDeletingBatch(null)
-    router.refresh()
+  function handleDeleteBatch(batchId: string) {
+    setDlg({ msg: 'حذف هذه الدفعة من سجل المشتريات؟', onOk: async () => {
+      setDeletingBatch(batchId)
+      const supabase = createClient()
+      await (supabase.from('purchases') as any).delete().eq('import_batch', batchId)
+      setDeletingBatch(null)
+      router.refresh()
+    }})
   }
 
   const totalPreview = preview.reduce((s, r) => s + r.total_price, 0)
@@ -226,7 +229,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
             {importMsg && (
               <span className={`text-sm ${importMsg.ok ? 'text-green-600' : 'text-red-600'}`}>{importMsg.text}</span>
             )}
-            <div className="flex gap-2 mr-auto">
+            <div className="flex gap-2 ms-auto">
               <button onClick={() => setPreview([])} className="text-sm px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">إلغاء</button>
               <button onClick={handleImport} disabled={importing}
                 className="text-sm px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium disabled:opacity-50 transition-colors">

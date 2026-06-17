@@ -1,7 +1,7 @@
 // Foodics export parser
 // Handles the ="..." cell format that Foodics uses in its CSV/Excel exports
 
-import type { SaleRow, FoodicsCancellationRow } from '@/types'
+import type { SaleRow, FoodicsCancellationRow, FoodicsModifierRow } from '@/types'
 
 // ── Cell cleaning ─────────────────────────────────────────────────
 
@@ -46,6 +46,8 @@ function findHeaderRow(rows: unknown[][]): number {
     if (first === 'المنتج' && second === 'الفرع') return i
     // Purchases (stock history) report header
     if (first === 'Name' && second === 'SKU') return i
+    // Modifiers report header
+    if (first === 'خيار الإضافة') return i
   }
   return -1
 }
@@ -74,6 +76,23 @@ function extractDateFromMeta(rows: unknown[][]): string {
     }
   }
   return new Date().toISOString().slice(0, 10)
+}
+
+// "2026-06-01 - 2026-06-30" → { dateFrom: "2026-06-01", dateTo: "2026-06-30" }
+function extractDateRangeFromMeta(rows: unknown[][]): { dateFrom: string; dateTo: string } {
+  const today = new Date().toISOString().slice(0, 10)
+  for (let i = 0; i < Math.min(rows.length, 10); i++) {
+    const key   = cleanCell(rows[i][0])
+    const value = cleanCell(rows[i][1])
+    if (key === 'النطاق الزمني' && value) {
+      const parts = value.split(' - ')
+      return {
+        dateFrom: parts[0]?.trim() ?? today,
+        dateTo:   parts[1]?.trim() ?? today,
+      }
+    }
+  }
+  return { dateFrom: today, dateTo: today }
 }
 
 // ── Sales Report Parser ───────────────────────────────────────────
@@ -215,7 +234,7 @@ export function parseFoodicsPurchases(rawRows: unknown[][], reportDate: string):
   return results
 }
 
-export type FoodicsReportType = 'sales' | 'cancellations' | 'purchases' | 'unknown'
+export type FoodicsReportType = 'sales' | 'cancellations' | 'purchases' | 'modifiers' | 'unknown'
 
 export function detectFoodicsReportType(rawRows: unknown[][]): FoodicsReportType {
   for (let i = 0; i < Math.min(rawRows.length, 5); i++) {
@@ -229,11 +248,40 @@ export function detectFoodicsReportType(rawRows: unknown[][]): FoodicsReportType
   if (headerIdx >= 0) {
     const first  = cleanCell(rawRows[headerIdx][0])
     const second = cleanCell(rawRows[headerIdx][1])
-    if (first === 'الفرع') return 'sales'
+    if (first === 'الفرع')                       return 'sales'
     if (first === 'المنتج' && second === 'الفرع') return 'cancellations'
-    if (first === 'Name'   && second === 'SKU')    return 'purchases'
+    if (first === 'Name'   && second === 'SKU')   return 'purchases'
+    if (first === 'خيار الإضافة')                return 'modifiers'
   }
   return 'unknown'
+}
+
+// ── Modifiers Report Parser ───────────────────────────────────────
+// Column التكلفة is intentionally ignored — costs are always calculated from our own ingredient data
+
+export function parseFoodicsModifiers(rawRows: unknown[][]): FoodicsModifierRow[] {
+  const headerIdx = findHeaderRow(rawRows)
+  if (headerIdx === -1) return []
+
+  const colMap = buildColMap(rawRows[headerIdx])
+  const results: FoodicsModifierRow[] = []
+
+  for (let i = headerIdx + 1; i < rawRows.length; i++) {
+    const row = rawRows[i]
+    const optionName = cleanCell(row[colMap['خيار الإضافة']])
+    if (!optionName) continue
+
+    results.push({
+      option_name:  optionName,
+      option_sku:   cleanCell(row[colMap['كود تعريف خيار الإضافة']]),
+      product_name: cleanCell(row[colMap['المنتج']]),
+      product_sku:  cleanCell(row[colMap['كود تعريف المنتج']]),
+      qty_sold:     toNum(row[colMap['صافي الكمية']]),
+      revenue:      toNum(row[colMap['إجمالي المبيعات']]),
+    })
+  }
+
+  return results.filter(r => r.qty_sold !== 0)
 }
 
 // ── Main entry: parse any Foodics file ───────────────────────────
@@ -243,7 +291,10 @@ export async function parseFoodicsFile(file: File): Promise<{
   sales: SaleRow[]
   cancellations: FoodicsCancellationRow[]
   purchases: import('@/types').PurchaseRow[]
+  modifiers: FoodicsModifierRow[]
   date: string
+  dateFrom: string
+  dateTo: string
 }> {
   const X = await import('xlsx')
   const buffer = await file.arrayBuffer()
@@ -254,12 +305,16 @@ export async function parseFoodicsFile(file: File): Promise<{
 
   const type = detectFoodicsReportType(rawRows)
   const date = extractDateFromMeta(rawRows)
+  const { dateFrom, dateTo } = extractDateRangeFromMeta(rawRows)
 
   return {
     type,
     date,
+    dateFrom,
+    dateTo,
     sales:         type === 'sales'         ? parseFoodicsSales(rawRows)              : [],
     cancellations: type === 'cancellations' ? parseFoodicsCancellations(rawRows)      : [],
     purchases:     type === 'purchases'     ? parseFoodicsPurchases(rawRows, date)    : [],
+    modifiers:     type === 'modifiers'     ? parseFoodicsModifiers(rawRows)          : [],
   }
 }

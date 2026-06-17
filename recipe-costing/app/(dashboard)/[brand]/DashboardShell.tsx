@@ -15,6 +15,7 @@ const NAV_BASE = [
   { key: 'batches',     icon: '⚙', label: 'الباتشات',      path: '/batches' },
   { key: 'products',    icon: '🛍', label: 'المنتجات',        path: '/products' },
   { key: 'combos',      icon: '🍱', label: 'وجبات الكومبو',  path: '/combos' },
+  { key: 'modifiers',   icon: '➕', label: 'الإضافات',       path: '/modifiers' },
   { key: 'ingredients', icon: '🥗', label: 'المواد الخام',   path: '/ingredients' },
   { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     path: '/purchasing' },
   { key: 'sales',       icon: '💰', label: 'المبيعات',      path: '/sales' },
@@ -342,7 +343,7 @@ export default function DashboardShell({
               {showAlerts && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setShowAlerts(false)} />
-                  <div className="absolute left-0 top-9 w-80 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden">
+                  <div className="absolute end-0 top-9 w-80 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-hidden">
                     <div className="px-4 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between">
                       <span className="font-semibold text-gray-900 text-sm">الإنذارات</span>
                       <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${alerts.length > 0 ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>

@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { MovementType, StockMovement, BrandId } from '@/types'
 
 interface InventoryItem {
@@ -210,6 +211,7 @@ function StockTab({ items, canE, brand, onRefresh }: {
         <div className="bg-white border border-gray-200 rounded-xl px-4 py-12 text-center text-gray-400 text-sm">لا توجد أصناف</div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
           <table suppressHydrationWarning className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-right bg-gray-50">
@@ -287,7 +289,7 @@ function StockTab({ items, canE, brand, onRefresh }: {
                           </div>
                         ) : (
                           <button onClick={() => { setEditingSku(item.sku); setEditMin(String(item.min_qty)); setEditExpiry(item.expiry_date ?? '') }}
-                            className="text-xs text-gray-400 hover:text-gray-700 transition-colors">✏</button>
+                            aria-label="تعديل" className="text-xs text-gray-400 hover:text-gray-700 transition-colors">✏</button>
                         )}
                       </td>
                     )}
@@ -296,6 +298,7 @@ function StockTab({ items, canE, brand, onRefresh }: {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -331,7 +334,7 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
       value: Math.round(numQty * (selected.cost ?? 0) * 10000) / 10000,
       note: note || null, performed_by: user?.id ?? null,
     })
-    if (movErr) { setMsg({ ok: false, text: movErr.message }); setSaving(false); return }
+    if (movErr) { setMsg({ ok: false, text: 'حدث خطأ أثناء تسجيل الحركة. أعد المحاولة.' }); setSaving(false); return }
     await (supabase.from('stock_items') as any).upsert({
       brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
       unit: selected.unit, current_qty: newQty, min_qty: selected.min_qty,
@@ -458,6 +461,7 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
         <div className="bg-white border border-gray-200 rounded-xl px-4 py-12 text-center text-gray-400 text-sm">لا توجد حركات بعد</div>
       ) : (
         <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
           <table suppressHydrationWarning className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-200 text-right bg-gray-50">
@@ -497,6 +501,7 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
     </div>
@@ -517,6 +522,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
   const [showNewForm, setShowNewForm] = useState(false)
   const [search, setSearch]   = useState('')
   const [msg, setMsg]         = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const loadSessions = useCallback(async () => {
     setLoadingSessions(true)
@@ -578,8 +584,8 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     setTimeout(() => setMsg(null), 3000)
   }
 
-  async function handleFinalize() {
-    if (!activeSession || !confirm('إنهاء الجرد وتحديث المخزون بالكميات الفعلية؟')) return
+  async function doFinalize() {
+    if (!activeSession) return
     setSaving(true)
     const supabase = createClient()
     const user = (await supabase.auth.getUser()).data.user
@@ -614,7 +620,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
       await (supabase.from('stock_movements') as any).insert({
         brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
         movement_type: 'adjustment', qty: variance,
-        value: Math.round(Math.abs(variance) * (costMap.get(item.ing_sku) ?? 0) * 10000) / 10000,
+        value: Math.round(variance * (costMap.get(item.ing_sku) ?? 0) * 10000) / 10000,
         note, performed_by: user?.id ?? null,
       })
     }
@@ -626,17 +632,23 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     setTimeout(() => setMsg(null), 4000)
   }
 
-  async function handleApproveSession(sessionId: string) {
-    if (!confirm('اعتماد هذا الجرد؟ لن يمكن التراجع.')) return
-    const res = await fetch(`/api/stocktake/${sessionId}/approve`, { method: 'POST' })
-    if (res.ok) {
-      await loadSessions()
-      setMsg({ ok: true, text: 'تم اعتماد الجرد ✓' })
-      setTimeout(() => setMsg(null), 3000)
-    } else {
-      const d = await res.json()
-      setMsg({ ok: false, text: d.error ?? 'فشل الاعتماد' })
-    }
+  function handleFinalize() {
+    if (!activeSession) return
+    setDlg({ msg: 'إنهاء الجرد وتحديث المخزون بالكميات الفعلية؟', onOk: doFinalize })
+  }
+
+  function handleApproveSession(sessionId: string) {
+    setDlg({ msg: 'اعتماد هذا الجرد؟ لن يمكن التراجع.', onOk: async () => {
+      const res = await fetch(`/api/stocktake/${sessionId}/approve`, { method: 'POST' })
+      if (res.ok) {
+        await loadSessions()
+        setMsg({ ok: true, text: 'تم اعتماد الجرد ✓' })
+        setTimeout(() => setMsg(null), 3000)
+      } else {
+        const d = await res.json()
+        setMsg({ ok: false, text: d.error ?? 'فشل الاعتماد' })
+      }
+    }})
   }
 
   if (activeSession) {
@@ -808,6 +820,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
             </table>
           </div>
         )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }
@@ -860,7 +873,7 @@ function AvailabilityTab({ brand }: { brand: BrandId }) {
   const ok      = dishes.filter(d => d.status === 'ok')
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className={`rounded-xl border p-4 text-center ${blocked.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
           <div className={`text-3xl font-bold font-mono ${blocked.length > 0 ? 'text-red-600' : 'text-gray-300'}`}>{blocked.length}</div>
           <div className={`text-xs font-semibold mt-1 ${blocked.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>🔴 معطّل (86)</div>
@@ -1657,7 +1670,7 @@ function WasteAnalyticsTab({ brand }: { brand: BrandId }) {
                       style={{ width: `${rows[0].total_value > 0 ? (r.total_value / rows[0].total_value) * 100 : 0}%` }}
                     />
                   </div>
-                  <span className="text-xs font-mono font-semibold text-red-700 w-20 text-left">{r.total_value.toFixed(2)} ر.س</span>
+                  <span className="text-xs font-mono font-semibold text-red-700 w-20 text-end">{r.total_value.toFixed(2)} ر.س</span>
                 </div>
               ))}
             </div>

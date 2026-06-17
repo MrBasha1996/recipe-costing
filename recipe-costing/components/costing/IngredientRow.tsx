@@ -76,11 +76,11 @@ export default function IngredientRow({ row, onChange, onDelete, canSeePrices, c
 
       {/* Line cost */}
       {canSeePrices && (
-        <div className="w-20 py-2.5 pl-2">
-          <div className="text-sm font-bold font-mono text-amber-600 text-left">
+        <div className="w-20 py-2.5 ps-2">
+          <div className="text-sm font-bold font-mono text-amber-600 text-end">
             {lineCost.toFixed(3)}
           </div>
-          <div className="text-xs text-gray-400 text-left">ر.س</div>
+          <div className="text-xs text-gray-400 text-end">ر.س</div>
         </div>
       )}
 

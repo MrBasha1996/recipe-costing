@@ -294,7 +294,7 @@ export default function UserForm({ user, onClose, onSaved }: Props) {
                       />
                       <span className="text-sm text-gray-700">{b.name}</span>
                       {brandAccess === 'all' && (
-                        <span className="text-xs text-gray-400 mr-auto">{b.brand_id}</span>
+                        <span className="text-xs text-gray-400 ms-auto">{b.brand_id}</span>
                       )}
                     </label>
                   ))}

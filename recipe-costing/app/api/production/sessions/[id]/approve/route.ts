@@ -30,6 +30,19 @@ export async function POST(
     return NextResponse.json({ error: 'الجلسة معتمدة مسبقاً' }, { status: 409 })
   }
 
+  // ── Period close guard ────────────────────────────────────────────
+  const { data: brandRow } = await (admin.from('brands') as any)
+    .select('closed_up_to').eq('id', brand_id).maybeSingle()
+  if (brandRow?.closed_up_to) {
+    const sessionYM = ((session as any).created_at as string).slice(0, 7)
+    if (sessionYM <= brandRow.closed_up_to) {
+      return NextResponse.json(
+        { error: `الفترة ${sessionYM} مُغلقة — لا يمكن اعتماد جلسة إنتاج في فترة مُغلقة` },
+        { status: 423 }
+      )
+    }
+  }
+
   const actuals = (session as any).actuals_json
   if (!actuals?.needs?.length) {
     return NextResponse.json({ error: 'بيانات الإنتاج غير موجودة في الجلسة' }, { status: 422 })
@@ -84,16 +97,24 @@ export async function POST(
     p_batch_value:        actuals.batch_value ?? 0,
   })
 
-  if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 })
+  // الاعتماد وخصم المخزون atomic داخل الـ RPC — لا كتابتين منفصلتين
+  if (rpcErr) {
+    const msg = rpcErr.message?.includes('P0002') ? 'الجلسة معتمدة مسبقاً' : rpcErr.message
+    return NextResponse.json({ error: msg }, { status: rpcErr.message?.includes('P0002') ? 409 : 500 })
+  }
 
-  const { error } = await (admin.from('production_sessions') as any)
-    .update({
-      status:      'approved',
-      approved_by: (user as any).id,
-      approved_at: new Date().toISOString(),
-    })
-    .eq('id', id)
+  await (admin.from('audit_logs') as any).insert({
+    brand_id,
+    action:       'production_session_approved',
+    entity_type:  'production_session',
+    entity_sku:   (session as any).batch_sku,
+    performed_by: (user as any).id,
+    metadata: {
+      session_id:   id,
+      qty_portions: (session as any).qty_portions,
+      batch_name:   (session as any).batch_name,
+    },
+  })
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

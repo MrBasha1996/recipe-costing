@@ -7,6 +7,7 @@ import { useUserStore } from '@/stores/userStore'
 import ComboTable from '@/components/combos/ComboTable'
 import ComboForm from '@/components/combos/ComboForm'
 import type { ComboMeal, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface Props {
   initialCombos: ComboMeal[]
@@ -22,6 +23,7 @@ export default function CombosClient({ initialCombos, brand }: Props) {
   const [editCombo, setEditCombo] = useState<ComboMeal | null>(null)
   const [recalculating, setRecalculating] = useState(false)
   const [recalcMsg, setRecalcMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [exporting, setExporting] = useState(false)
 
   useEffect(() => { setCombos(initialCombos) }, [initialCombos])
@@ -34,15 +36,15 @@ export default function CombosClient({ initialCombos, brand }: Props) {
   function handleEdit(c: ComboMeal) { setEditCombo(c); setShowForm(true) }
   function handleClose() { setShowForm(false); setEditCombo(null) }
 
-  async function handleDelete(c: ComboMeal) {
-    if (!confirm(`حذف كومبو "${c.name}"؟`)) return
-    const supabase = createClient()
-    await (supabase.from('combo_meals') as any).delete().eq('id', c.id)
-    router.refresh()
+  function handleDelete(c: ComboMeal) {
+    setDlg({ msg: `حذف كومبو "${c.name}"؟`, onOk: async () => {
+      const supabase = createClient()
+      await (supabase.from('combo_meals') as any).delete().eq('id', c.id)
+      router.refresh()
+    }})
   }
 
-  async function handleRecalcAll() {
-    if (!confirm('إعادة احتساب تكاليف جميع الكومبو بناءً على أسعار الوصفات الحالية؟')) return
+  async function doRecalcAll() {
     setRecalculating(true)
     setRecalcMsg(null)
     try {
@@ -124,6 +126,10 @@ export default function CombosClient({ initialCombos, brand }: Props) {
     } finally {
       setRecalculating(false)
     }
+  }
+
+  function handleRecalcAll() {
+    setDlg({ msg: 'إعادة احتساب تكاليف جميع الكومبو بناءً على أسعار الوصفات الحالية؟', onOk: doRecalcAll })
   }
 
   async function handleExport() {
@@ -239,6 +245,7 @@ export default function CombosClient({ initialCombos, brand }: Props) {
           onSaved={() => { handleClose(); router.refresh() }}
         />
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

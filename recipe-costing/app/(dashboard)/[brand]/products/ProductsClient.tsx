@@ -8,6 +8,7 @@ import ProductTable from '@/components/products/ProductTable'
 import ProductForm from '@/components/products/ProductForm'
 import { exportProducts, importProducts, downloadProductsTemplate } from '@/lib/dataImportExport'
 import type { Product, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface Props {
   initialProducts: Product[]
@@ -23,6 +24,7 @@ export default function ProductsClient({ initialProducts, brand }: Props) {
   const [editProduct, setEditProduct] = useState<Product | null>(null)
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   // عند تغيير brand تأتي بيانات جديدة من السيرفر
@@ -36,11 +38,12 @@ export default function ProductsClient({ initialProducts, brand }: Props) {
   function handleEdit(p: Product) { setEditProduct(p); setShowForm(true) }
   function handleClose() { setShowForm(false); setEditProduct(null) }
 
-  async function handleDelete(p: Product) {
-    if (!confirm(`حذف "${p.name}"؟`)) return
-    const supabase = createClient()
-    await supabase.from('products').delete().eq('sku', p.sku).eq('brand_id', p.brand_id)
-    router.refresh()
+  function handleDelete(p: Product) {
+    setDlg({ msg: `حذف "${p.name}"؟`, onOk: async () => {
+      const supabase = createClient()
+      await supabase.from('products').delete().eq('sku', p.sku).eq('brand_id', p.brand_id)
+      router.refresh()
+    }})
   }
 
   return (
@@ -137,6 +140,7 @@ export default function ProductsClient({ initialProducts, brand }: Props) {
           onSaved={() => { handleClose(); router.refresh() }}
         />
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

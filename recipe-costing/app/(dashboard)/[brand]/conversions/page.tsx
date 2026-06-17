@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useParams } from 'next/navigation'
 import { useUserStore } from '@/stores/userStore'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface UnitConversion {
   id: string
@@ -33,6 +34,7 @@ export default function ConversionsPage() {
   const [saving, setSaving]         = useState(false)
   const [error, setError]           = useState<string | null>(null)
   const [deleting, setDeleting]     = useState<string | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -96,13 +98,14 @@ export default function ConversionsPage() {
     await load()
   }
 
-  async function handleDelete(r: UnitConversion) {
-    if (!confirm(`حذف تحويل "${r.ing_name}"؟`)) return
-    setDeleting(r.id)
-    const supabase = createClient()
-    await (supabase.from('unit_conversions') as any).delete().eq('id', r.id)
-    setDeleting(null)
-    await load()
+  function handleDelete(r: UnitConversion) {
+    setDlg({ msg: `حذف تحويل "${r.ing_name}"؟`, onOk: async () => {
+      setDeleting(r.id)
+      const supabase = createClient()
+      await (supabase.from('unit_conversions') as any).delete().eq('id', r.id)
+      setDeleting(null)
+      await load()
+    }})
   }
 
   const filtered = rows.filter(r =>
@@ -273,6 +276,7 @@ export default function ConversionsPage() {
           </div>
         </div>
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

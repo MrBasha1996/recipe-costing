@@ -39,11 +39,8 @@ truncate table suppliers restart identity cascade;
 -- الفروع
 truncate table branches restart identity cascade;
 
--- سجلات RBAC والتدقيق
-truncate table rbac_audit_logs restart identity cascade;
-truncate table audit_logs restart identity cascade;
-
 -- =====================================================
 -- ما يبقى (لا يُمس):
 -- brands, user_profiles, roles, modules, role_permissions, unit_conversions
+-- audit_logs, rbac_audit_logs  ← سجل التدقيق لا يُحذف أبداً (قيمة قانونية)
 -- =====================================================

@@ -144,7 +144,7 @@ export default function RecipeVersionDiff({ open, onClose, versions, brand, prod
     <>
       <div className="fixed inset-0 bg-black/50 z-40" onClick={onClose} />
 
-      <div className="fixed inset-y-0 left-0 w-[520px] max-w-full bg-white border-r border-gray-200 z-50 flex flex-col shadow-xl">
+      <div className="fixed inset-y-0 right-0 w-[520px] max-w-full bg-white border-l border-gray-200 z-50 flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
           <div>
@@ -166,7 +166,7 @@ export default function RecipeVersionDiff({ open, onClose, versions, brand, prod
                   </option>
                 ))}
               </select>
-              {oldV && <div className="text-[10px] text-gray-400 mt-1 font-mono">تكلفة: {oldV.total_cost.toFixed(3)} · FC: {(oldV.food_cost_pct ?? 0).toFixed(1)}%</div>}
+              {oldV && <div className="text-[10px] text-gray-400 mt-1 font-mono">تكلفة: {(oldV.total_cost ?? 0).toFixed(3)} · FC: {(oldV.food_cost_pct ?? 0).toFixed(1)}%</div>}
             </div>
             <div>
               <label className="block text-[10px] text-gray-400 mb-1">الإصدار الجديد</label>
@@ -177,7 +177,7 @@ export default function RecipeVersionDiff({ open, onClose, versions, brand, prod
                   </option>
                 ))}
               </select>
-              {newV && <div className="text-[10px] text-gray-400 mt-1 font-mono">تكلفة: {newV.total_cost.toFixed(3)} · FC: {(newV.food_cost_pct ?? 0).toFixed(1)}%</div>}
+              {newV && <div className="text-[10px] text-gray-400 mt-1 font-mono">تكلفة: {(newV.total_cost ?? 0).toFixed(3)} · FC: {(newV.food_cost_pct ?? 0).toFixed(1)}%</div>}
             </div>
           </div>
         </div>
@@ -193,7 +193,7 @@ export default function RecipeVersionDiff({ open, onClose, versions, brand, prod
             )}
 
             {/* Cost/FC summary */}
-            <div className="mr-auto flex items-center gap-3 text-[11px]">
+            <div className="ms-auto flex items-center gap-3 text-[11px]">
               <span className={costDiff >= 0 ? 'text-red-600 font-semibold' : 'text-green-600 font-semibold'}>
                 التكلفة {costDiff >= 0 ? '+' : ''}{costDiff.toFixed(3)} ر.س
               </span>

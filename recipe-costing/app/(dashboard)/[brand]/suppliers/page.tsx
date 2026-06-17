@@ -5,6 +5,7 @@ import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useParams } from 'next/navigation'
 import { useUserStore } from '@/stores/userStore'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface Supplier {
   id: string
@@ -79,6 +80,7 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
   const [form, setForm] = useState({ name: '', phone: '', contact_person: '', notes: '' })
   const [saving, setSaving] = useState(false)
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [purchaseTotals, setPurchaseTotals] = useState<Map<string, { total: number; count: number }>>(new Map())
 
   useEffect(() => {
@@ -134,11 +136,12 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
     setTimeout(() => setMsg(null), 3000)
   }
 
-  async function handleDelete(id: string, name: string) {
-    if (!confirm(`حذف المورد "${name}"؟`)) return
-    const supabase = createClient()
-    await (supabase.from('suppliers') as any).delete().eq('id', id)
-    onRefresh()
+  function handleDelete(id: string, name: string) {
+    setDlg({ msg: `حذف المورد "${name}"؟`, onOk: async () => {
+      const supabase = createClient()
+      await (supabase.from('suppliers') as any).delete().eq('id', id)
+      onRefresh()
+    }})
   }
 
   return (
@@ -261,6 +264,7 @@ function SupplierList({ suppliers, brand, canE, onRefresh }: {
           </table>
         </div>
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

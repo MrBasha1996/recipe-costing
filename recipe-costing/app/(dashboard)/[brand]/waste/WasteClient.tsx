@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { lastNMonths, formatYearMonth, monthRange } from '@/lib/period'
 import type { WasteLog, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 const WasteAnalysis = dynamic(() => import('./WasteAnalysis'), { ssr: false })
 
@@ -41,6 +42,7 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
   const [logs, setLogs]         = useState<WasteLog[]>(initialLogs)
   const [loading, setLoading]   = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const [form, setForm] = useState({
     product_name: '', product_sku: '',
@@ -112,13 +114,14 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
       value: selectedIng && val ? String((parseFloat(val) * selectedIng.cost).toFixed(2)) : f.value }))
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('حذف هذا السجل؟')) return
-    setDeleting(id)
-    const supabase = createClient()
-    await (supabase.from('waste_log') as any).delete().eq('id', id)
-    setDeleting(null)
-    fetchLogs(month)
+  function handleDelete(id: string) {
+    setDlg({ msg: 'حذف هذا السجل؟', onOk: async () => {
+      setDeleting(id)
+      const supabase = createClient()
+      await (supabase.from('waste_log') as any).delete().eq('id', id)
+      setDeleting(null)
+      fetchLogs(month)
+    }})
   }
 
   async function handleAdd(e: React.FormEvent) {
@@ -292,8 +295,8 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
                             </span>
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-500">{r.branch_name || '—'}</td>
-                          <td className="px-4 py-3 text-left font-mono text-sm text-gray-700">{r.qty}</td>
-                          <td className="px-4 py-3 text-left font-mono font-semibold"
+                          <td className="px-4 py-3 text-end font-mono text-sm text-gray-700">{r.qty}</td>
+                          <td className="px-4 py-3 text-end font-mono font-semibold"
                             style={{ color: r.value > 0 ? c.text : '#9ca3af' }}>
                             {r.value > 0 ? `${r.value.toFixed(2)} ر.س` : '—'}
                           </td>
@@ -316,8 +319,8 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
                   <tfoot>
                     <tr className="bg-gray-50 border-t-2 border-gray-200">
                       <td colSpan={4} className="px-4 py-3 text-xs font-semibold text-gray-600">الإجمالي</td>
-                      <td className="px-4 py-3 text-left font-mono font-bold text-gray-800">{totalQty.toFixed(0)}</td>
-                      <td className="px-4 py-3 text-left font-mono font-bold text-red-600">{totalValue.toFixed(2)} ر.س</td>
+                      <td className="px-4 py-3 text-end font-mono font-bold text-gray-800">{totalQty.toFixed(0)}</td>
+                      <td className="px-4 py-3 text-end font-mono font-bold text-red-600">{totalValue.toFixed(2)} ر.س</td>
                       <td colSpan={canE ? 3 : 2} />
                     </tr>
                   </tfoot>
@@ -452,6 +455,7 @@ export default function WasteClient({ initialLogs, initialMonth, brand }: Props)
           </form>
         </div>
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

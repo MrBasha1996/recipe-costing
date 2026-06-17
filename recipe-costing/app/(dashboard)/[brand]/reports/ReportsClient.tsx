@@ -15,7 +15,7 @@ import {
   ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts'
 
-type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl'
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl' | 'snapshot'
 
 const TAB_MODULE: Record<ReportTab, string> = {
   'pl':          'report_pl',
@@ -35,6 +35,7 @@ const TAB_MODULE: Record<ReportTab, string> = {
   'discounts':   'report_discounts',
   'consumption': 'report_consumption',
   'compare-pl':  'report_compare_pl',
+  'snapshot':    'report_pl',
 }
 
 interface Props {
@@ -75,6 +76,28 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
 
   const { hasPermission, isSuperAdmin, loaded: permsLoaded } = usePermissionsStore()
 
+  const [closedUpTo, setClosedUpTo]   = useState<string | null>(null)
+  const [snapshot, setSnapshot]       = useState<Record<string, any> | null>(null)
+
+  // جلب حالة الإغلاق لهذا البراند
+  useEffect(() => {
+    const supabase = createClient()
+    ;(supabase.from('brands') as any)
+      .select('closed_up_to').eq('id', brand).maybeSingle()
+      .then(({ data }: any) => setClosedUpTo(data?.closed_up_to ?? null))
+  }, [brand])
+
+  // إذا الشهر مُغلق، جلب الـ snapshot
+  useEffect(() => {
+    if (!closedUpTo || month > closedUpTo) { setSnapshot(null); return }
+    const supabase = createClient()
+    ;(supabase.from('period_snapshots') as any)
+      .select('snapshot').eq('brand_id', brand).eq('year_month', month).maybeSingle()
+      .then(({ data }: any) => setSnapshot(data?.snapshot ?? null))
+  }, [brand, month, closedUpTo])
+
+  const isMonthClosed = !!closedUpTo && month <= closedUpTo
+
   const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
 
   const ALL_TABS: { key: ReportTab; label: string }[] = [
@@ -95,12 +118,14 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
     { key: 'discounts',   label: 'الخصومات والمرتجعات' },
     { key: 'consumption', label: 'استهلاك المواد' },
     { key: 'compare-pl',  label: 'مقارنة الفترات' },
+    { key: 'snapshot',    label: '🔒 لقطة الإغلاق' },
   ]
 
   // فلترة التبويبات بحسب الصلاحيات — قبل تحميل الصلاحيات نعرض الكل
-  const tabs = !permsLoaded || isSuperAdmin
+  const tabs = (!permsLoaded || isSuperAdmin
     ? ALL_TABS
     : ALL_TABS.filter(t => hasPermission(TAB_MODULE[t.key], 'view'))
+  ).filter(t => t.key !== 'snapshot' || isMonthClosed)
 
   // إذا التبويب الحالي أصبح مخفياً، انتقل للأول المتاح
   useEffect(() => {
@@ -149,6 +174,18 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
         ))}
       </div>
 
+      {/* بانر الإغلاق */}
+      {isMonthClosed && tab !== 'snapshot' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          <span>🔒</span>
+          <span>هذه الفترة مُغلقة — البيانات ثابتة ولا يمكن إضافة معاملات بتاريخها.</span>
+          <button onClick={() => setTab('snapshot')} className="ms-auto text-xs underline text-amber-700 hover:text-amber-900">
+            عرض لقطة الإغلاق ←
+          </button>
+        </div>
+      )}
+
+      {tab === 'snapshot' && <SnapshotTab snapshot={snapshot} month={month} />}
       {tab === 'pl'        && <PLReport        brand={brand} month={month} branch={branch} />}
       {tab === 'fc'        && <FCReport         brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
       {tab === 'breakeven' && <BreakevenReport  brand={brand} month={month} branch={branch} />}
@@ -1090,7 +1127,7 @@ interface MenuItem {
   name: string
   qty: number
   margin: number
-  marginPct: number
+  fcPct: number
   category: MenuCategory
 }
 
@@ -1130,22 +1167,22 @@ function MenuEngineering({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }:
     const recipeMap = new Map<string, any>()
     for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
 
-    const raw: { qty: number; margin: number; marginPct: number; sku: string; name: string }[] = []
+    const raw: { qty: number; margin: number; fcPct: number; sku: string; name: string }[] = []
     for (const [sku, sale] of saleMap) {
       const r = recipeMap.get(sku)
       if (!r) continue
-      raw.push({ sku, name: sale.name, qty: sale.qty, margin: r.margin, marginPct: r.food_cost_pct })
+      raw.push({ sku, name: sale.name, qty: sale.qty, margin: r.margin, fcPct: r.food_cost_pct })
     }
 
     if (!raw.length) { setItems([]); setLoading(false); return }
 
     const meanQty = raw.reduce((s, i) => s + i.qty, 0) / raw.length
-    const meanPct = raw.reduce((s, i) => s + i.marginPct, 0) / raw.length
+    const meanPct = raw.reduce((s, i) => s + i.fcPct, 0) / raw.length
     setAvgQty(meanQty); setAvgMarginPct(meanPct)
 
     const classified: MenuItem[] = raw.map(i => {
       const hiQty = i.qty >= meanQty
-      const hiMargin = i.marginPct <= meanPct // lower FC% = better margin
+      const hiMargin = i.fcPct <= meanPct // lower FC% = better margin
       const category: MenuCategory = hiQty && hiMargin ? 'star' : hiQty ? 'plowhorse' : hiMargin ? 'puzzle' : 'dog'
       return { ...i, category }
     })
@@ -1161,7 +1198,7 @@ function MenuEngineering({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }:
   const counts = { star: 0, plowhorse: 0, puzzle: 0, dog: 0 }
   items.forEach(i => counts[i.category]++)
 
-  const scatterData = items.map(i => ({ x: i.qty, y: i.marginPct, name: i.name, fill: CATEGORY_CONFIG[i.category].color }))
+  const scatterData = items.map(i => ({ x: i.qty, y: i.fcPct, name: i.name, fill: CATEGORY_CONFIG[i.category].color }))
 
   return (
     <div className="space-y-6">
@@ -1234,8 +1271,8 @@ function MenuEngineering({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }:
                     <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
                   </td>
                   <td className="px-4 py-2.5 text-center font-mono font-bold text-gray-900">{item.qty.toLocaleString()}</td>
-                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-semibold ${item.marginPct <= fcLow ? 'text-green-600' : item.marginPct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
-                    {item.marginPct.toFixed(1)}%
+                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-semibold ${item.fcPct <= fcLow ? 'text-green-600' : item.fcPct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                    {item.fcPct.toFixed(1)}%
                   </td>
                   <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{item.margin.toFixed(2)} ر.س</td>
                   <td className="px-4 py-2.5 text-center">
@@ -1292,11 +1329,35 @@ function VarianceReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: 
     const recipeMap = new Map<string, number>()
     for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r.total_cost / Math.max(r.yield_portions, 1))
 
+    // Fetch modifier_sales overlapping this month and add their ingredient costs to theoretical consumption
+    const { data: modSales } = await (supabase.from('modifier_sales') as any)
+      .select('option_sku, product_sku, qty_sold')
+      .eq('brand_id', brand)
+      .lte('date_from', end)
+      .gte('date_to', start)
+
+    const modCostPerProduct = new Map<string, number>()
+    const modSalesList = (modSales || []) as any[]
+    if (modSalesList.length > 0) {
+      const optionSkus = [...new Set(modSalesList.map((r: any) => r.option_sku as string))]
+      const { data: modOptions } = await (supabase.from('modifier_options') as any)
+        .select('option_sku, total_cost').eq('brand_id', brand).in('option_sku', optionSkus)
+      const modOptionCostMap = new Map<string, number>()
+      for (const opt of (modOptions || []) as any[]) modOptionCostMap.set(opt.option_sku, opt.total_cost ?? 0)
+      for (const sale of modSalesList) {
+        const optCost = modOptionCostMap.get(sale.option_sku) ?? 0
+        if (optCost <= 0) continue
+        modCostPerProduct.set(sale.product_sku, (modCostPerProduct.get(sale.product_sku) ?? 0) + optCost * sale.qty_sold)
+      }
+    }
+
     const result = [...map.entries()].map(([sku, p]) => {
       const cpUnit = recipeMap.get(sku) ?? null
       const rev = p.revenue / VAT_RATE
       const netRev = Math.max(0, (p.revenue - p.discount - p.returnAmt) / VAT_RATE)
-      const thCost = cpUnit != null ? cpUnit * p.qty : null
+      const recipeCost = cpUnit != null ? cpUnit * p.qty : null
+      const modCost    = modCostPerProduct.get(sku) ?? 0
+      const thCost     = recipeCost != null ? recipeCost + modCost : (modCost > 0 ? modCost : null)
       return {
         sku, name: p.name, qty: p.qty,
         rev, netRev, discount: p.discount, returnAmt: p.returnAmt,
@@ -1458,11 +1519,12 @@ function PrimeCostReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }:
       if (!rec) return null
       const revExVat = p.revenue / VAT_RATE
       const fcPct = rec.food_cost_pct as number
-      const primeCostPct = fcPct + laborPct + overheadPct
+      const primeCostPct = fcPct + laborPct          // Prime Cost = FC + Labor (لا Overhead)
+      const totalCostPct = primeCostPct + overheadPct
       const sellExVat = (rec.sell_price as number) / VAT_RATE
       const fcPerUnit = (rec.total_cost as number) / Math.max(rec.yield_portions, 1)
       const opMargin = sellExVat - fcPerUnit - (laborPct / 100) * sellExVat - (overheadPct / 100) * sellExVat
-      return { sku, name: p.name, qty: p.qty, revExVat, fcPct, laborPct, overheadPct, primeCostPct, opMarginPct: 100 - primeCostPct, opMargin }
+      return { sku, name: p.name, qty: p.qty, revExVat, fcPct, laborPct, overheadPct, primeCostPct, totalCostPct, opMarginPct: 100 - totalCostPct, opMargin }
     }).filter(Boolean).sort((a: any, b: any) => a.opMarginPct - b.opMarginPct)
 
     setRows(result as any[]); setLoading(false)
@@ -3135,6 +3197,119 @@ function ComparePLReport({ brand, months }: { brand: string; months: string[] })
             )
           })()}
         </>
+      )}
+    </div>
+  )
+}
+
+// ── Snapshot Tab ───────────────────────────────────────────────────
+function SnapshotTab({ snapshot, month }: { snapshot: Record<string, any> | null; month: string }) {
+  if (!snapshot) {
+    return (
+      <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+        لا توجد لقطة محفوظة لهذه الفترة
+      </div>
+    )
+  }
+
+  const inv = (snapshot.closing_inventory ?? []) as any[]
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-bold text-gray-900">لقطة إغلاق {formatYearMonth(month)}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          أُغلقت في {new Date(snapshot.closed_at).toLocaleString('ar-SA')}
+        </p>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">صافي الإيرادات</div>
+          <div className="text-xl font-bold font-mono text-gray-900">
+            {Number(snapshot.sales_net ?? Number(snapshot.sales) / 1.15).toFixed(2)}
+          </div>
+          <div className="text-xs text-gray-400">
+            ر.س · إجمالي {Number(snapshot.sales).toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">COGS</div>
+          <div className="text-xl font-bold font-mono text-gray-900">{Number(snapshot.cogs).toFixed(2)}</div>
+          <div className="text-xs text-gray-400">ر.س</div>
+        </div>
+        <div className={`border rounded-xl p-4 ${Number(snapshot.fc_pct) > 45 ? 'bg-red-50 border-red-200' : Number(snapshot.fc_pct) > 35 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+          <div className="text-xs text-gray-500 mb-1">FC%</div>
+          <div className={`text-xl font-bold font-mono ${Number(snapshot.fc_pct) > 45 ? 'text-red-700' : Number(snapshot.fc_pct) > 35 ? 'text-amber-700' : 'text-green-700'}`}>
+            {snapshot.fc_pct}%
+          </div>
+          <div className="text-xs text-gray-400">تكلفة الغذاء</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">مخزون ختامي</div>
+          <div className="text-xl font-bold font-mono text-gray-900">{Number(snapshot.ending_inv_value).toFixed(2)}</div>
+          <div className="text-xs text-gray-400">ر.س</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">إجمالي المشتريات</div>
+          <div className="text-lg font-bold font-mono text-gray-900">{Number(snapshot.purchases).toFixed(2)} ر.س</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">مجمل الربح</div>
+          <div className="text-lg font-bold font-mono text-gray-900">{Number(snapshot.gross_profit).toFixed(2)} ر.س</div>
+        </div>
+      </div>
+
+      {/* Closing Inventory */}
+      {inv.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+            <span className="text-sm font-semibold text-gray-900">مخزون آخر المدة — {inv.length} صنف</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 text-xs text-gray-500 bg-gray-50">
+                  <th className="text-right px-4 py-2.5 font-medium">الصنف</th>
+                  <th className="text-center px-4 py-2.5 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-2.5 font-medium">WAC</th>
+                  <th className="text-center px-4 py-2.5 font-medium">القيمة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {inv.map((item: any) => (
+                  <tr key={item.sku} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-800">{item.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700">
+                      {Number(item.qty).toFixed(3)} {item.unit}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600">
+                      {Number(item.cost).toFixed(4)}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono font-semibold text-gray-800">
+                      {Number(item.value).toFixed(2)} ر.س
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-gray-700 text-right">الإجمالي</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-gray-900">
+                    {inv.reduce((s: number, i: any) => s + Number(i.value), 0).toFixed(2)} ر.س
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
       )}
     </div>
   )

@@ -43,3 +43,6 @@ dev_output.txt
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# admin scripts (contain credentials — never commit)
+/scripts/create-admin.mjs

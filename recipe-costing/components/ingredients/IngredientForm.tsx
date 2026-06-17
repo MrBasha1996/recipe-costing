@@ -154,7 +154,7 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
       ? await (supabase.from('ingredients') as any).update(payload).eq('sku', ingredient!.sku).eq('brand_id', brand)
       : await (supabase.from('ingredients') as any).insert(payload)
 
-    if (dbErr) { setError(dbErr.message); setSaving(false); return }
+    if (dbErr) { setError('حدث خطأ أثناء الحفظ. تأكد من البيانات وأعد المحاولة.'); setSaving(false); return }
 
     const factorNum = parseFloat(convFactor)
     if (buyUnit.trim() && factorNum > 0) {

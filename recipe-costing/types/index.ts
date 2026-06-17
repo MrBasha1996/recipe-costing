@@ -141,6 +141,43 @@ export interface AuditLog {
   created_at: string
 }
 
+export interface ModifierGroup {
+  id: string
+  brand_id: BrandId
+  name: string
+  is_required: boolean
+  min_select: number
+  max_select: number
+  sort_order: number
+  is_active: boolean
+  created_at: string
+}
+
+export interface ModifierOption {
+  id: string
+  group_id: string
+  brand_id: BrandId
+  option_sku: string
+  name: string
+  price: number
+  total_cost: number
+  sort_order: number
+  is_active: boolean
+  created_at: string
+}
+
+export interface ModifierOptionIngredient {
+  id: string
+  option_id: string
+  ing_sku: string
+  ing_name: string
+  qty: number
+  unit: string
+  unit_cost: number
+  yield_pct: number
+  sort_order: number
+}
+
 export type MovementType = 'in' | 'out' | 'waste' | 'adjustment'
 
 export interface StockItem {
@@ -328,6 +365,15 @@ export interface FoodicsCancellationRow {
   value: number
   reason: string
   was_wasted: boolean
+}
+
+export interface FoodicsModifierRow {
+  option_name: string
+  option_sku: string
+  product_name: string
+  product_sku: string
+  qty_sold: number
+  revenue: number
 }
 
 // ── Component search item (ingredient or semi-product) ──────────

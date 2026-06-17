@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import UserForm from '@/components/users/UserForm'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { UserProfile, AuditLog } from '@/types'
 
 const BRAND_LABELS: Record<string, string> = {
@@ -30,6 +31,7 @@ export default function UsersPage() {
   const [showForm, setShowForm] = useState(false)
   const [editUser, setEditUser] = useState<UserProfile | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const loadUsers = useCallback(async () => {
     setLoading(true)
@@ -70,20 +72,21 @@ export default function UsersPage() {
   useEffect(() => { loadUsers() }, [loadUsers])
   useEffect(() => { if (tab === 'audit') loadAudit() }, [tab, loadAudit])
 
-  async function handleDelete(user: UserProfile) {
-    if (!confirm(`حذف "${user.name_ar}"؟ هذا الإجراء لا يمكن التراجع عنه.`)) return
-    setDeletingId(user.id)
-    try {
-      const res = await fetch(`/api/users/${user.id}`, { method: 'DELETE' })
-      if (!res.ok) {
-        const data = await res.json()
-        alert(data.error)
-        return
+  function handleDelete(user: UserProfile) {
+    setDlg({ msg: `حذف "${user.name_ar}"؟ هذا الإجراء لا يمكن التراجع عنه.`, onOk: async () => {
+      setDeletingId(user.id)
+      try {
+        const res = await fetch(`/api/users/${user.id}`, { method: 'DELETE' })
+        if (!res.ok) {
+          const data = await res.json()
+          setDlg({ msg: data.error ?? 'فشل الحذف', onOk: () => {} })
+          return
+        }
+        await loadUsers()
+      } finally {
+        setDeletingId(null)
       }
-      await loadUsers()
-    } finally {
-      setDeletingId(null)
-    }
+    }})
   }
 
   function handleEdit(user: UserProfile) {
@@ -284,6 +287,7 @@ export default function UsersPage() {
           onSaved={handleSaved}
         />
       )}
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

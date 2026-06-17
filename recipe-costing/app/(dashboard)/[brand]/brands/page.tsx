@@ -3,10 +3,13 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { usePermissionsStore } from '@/stores/permissionsStore'
+import { lastNMonths, formatYearMonth } from '@/lib/period'
 import type { Brand } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
 interface BrandRow extends Brand {
-  user_count?: number
+  user_count?:  number
+  closed_up_to?: string | null
 }
 
 interface FormState {
@@ -40,6 +43,11 @@ export default function BrandsPage() {
   const [saving, setSaving] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [error, setError] = useState('')
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
+  const [closeDlg, setCloseDlg] = useState<{ brand: BrandRow } | null>(null)
+  const [closeMonth, setCloseMonth] = useState('')
+  const [closing, setClosing] = useState(false)
+  const [closeResult, setCloseResult] = useState<Record<string, any> | null>(null)
 
   const { hasPermission, isSuperAdmin } = usePermissionsStore()
   const canCreate = isSuperAdmin || hasPermission('brands', 'create')
@@ -50,7 +58,7 @@ export default function BrandsPage() {
     setLoading(true)
     const supabase = createClient()
     const { data: brandData } = await (supabase.from('brands') as any)
-      .select('id, name, name_ar, fc_target_low, fc_target_high, logo_url, primary_color, delivery_commission_pct')
+      .select('id, name, name_ar, fc_target_low, fc_target_high, logo_url, primary_color, delivery_commission_pct, closed_up_to')
       .order('id')
 
     const { data: userData } = await (supabase.from('user_profiles') as any)
@@ -145,17 +153,45 @@ export default function BrandsPage() {
     }
   }
 
-  async function handleDelete(b: BrandRow) {
-    if (!confirm(`حذف براند "${b.name_ar}"؟ لا يمكن الحذف إن كانت هناك بيانات مرتبطة.`)) return
-    setDeletingId(b.id)
+  function handleDelete(b: BrandRow) {
+    setDlg({ msg: `حذف براند "${b.name_ar}"؟ لا يمكن الحذف إن كانت هناك بيانات مرتبطة.`, onOk: async () => {
+      setDeletingId(b.id)
+      const supabase = createClient()
+      const { error: err } = await (supabase.from('brands') as any).delete().eq('id', b.id)
+      if (err) setError('فشل الحذف: هناك بيانات مرتبطة بهذا البراند')
+      else await load()
+      setDeletingId(null)
+    }})
+  }
+
+  function handleOpenCloseDlg(b: BrandRow) {
+    const months = lastNMonths(12)
+    const defaultMonth = b.closed_up_to
+      ? months.find(m => m > b.closed_up_to!) ?? months[0]
+      : months[0]
+    setCloseMonth(defaultMonth ?? '')
+    setCloseResult(null)
+    setCloseDlg({ brand: b })
+  }
+
+  async function doClose() {
+    if (!closeDlg || !closeMonth) return
+    setClosing(true)
+    setCloseResult(null)
     const supabase = createClient()
-    const { error: err } = await (supabase.from('brands') as any).delete().eq('id', b.id)
-    if (err) {
-      alert('فشل الحذف: ' + (err.message ?? 'هناك بيانات مرتبطة بهذا البراند'))
+    const user = (await supabase.auth.getUser()).data.user
+    const { data, error } = await (supabase as any).rpc('close_period', {
+      p_brand_id:   closeDlg.brand.id,
+      p_year_month: closeMonth,
+      p_closed_by:  user?.id ?? null,
+    })
+    setClosing(false)
+    if (error) {
+      setCloseResult({ error: error.message })
     } else {
+      setCloseResult(data as Record<string, any>)
       await load()
     }
-    setDeletingId(null)
   }
 
   const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500'
@@ -192,6 +228,7 @@ export default function BrandsPage() {
                 <th className="text-center px-4 py-3 font-medium">هدف FC%</th>
                 <th className="text-center px-4 py-3 font-medium">عمولة التوصيل</th>
                 <th className="text-center px-4 py-3 font-medium">المستخدمون</th>
+                <th className="text-center px-4 py-3 font-medium">الإغلاق</th>
                 <th className="text-center px-4 py-3 font-medium">إجراءات</th>
               </tr>
             </thead>
@@ -231,6 +268,15 @@ export default function BrandsPage() {
                   <td className="px-4 py-3 text-center">
                     <span className="text-xs font-medium text-gray-700">{b.user_count ?? 0}</span>
                   </td>
+                  <td className="px-4 py-3 text-center">
+                    {b.closed_up_to ? (
+                      <span className="text-xs bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full font-medium">
+                        🔒 {formatYearMonth(b.closed_up_to)}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-300">مفتوح</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3">
                     <div className="flex items-center justify-center gap-2">
                       {canUpdate && (
@@ -239,6 +285,14 @@ export default function BrandsPage() {
                           className="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors"
                         >
                           تعديل
+                        </button>
+                      )}
+                      {canUpdate && (
+                        <button
+                          onClick={() => handleOpenCloseDlg(b)}
+                          className="text-xs px-3 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition-colors"
+                        >
+                          🔒 إغلاق
                         </button>
                       )}
                       {canDelete && (
@@ -256,7 +310,7 @@ export default function BrandsPage() {
               ))}
               {brands.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
+                  <td colSpan={8} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
                 </tr>
               )}
             </tbody>
@@ -411,6 +465,93 @@ export default function BrandsPage() {
           </div>
         </div>
       )}
+      {/* ── Close Period Modal ──────────────────────────────────────── */}
+      {closeDlg && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6">
+            <h2 className="text-lg font-bold text-gray-900 mb-1">إغلاق الفترة المحاسبية</h2>
+            <p className="text-sm text-gray-500 mb-5">{closeDlg.brand.name_ar}</p>
+
+            {!closeResult ? (
+              <>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-sm text-amber-800 mb-5">
+                  ⚠ هذا الإجراء لا يمكن التراجع عنه. سيُجمّد الشهر المختار وينشئ لقطة ثابتة من البيانات.
+                </div>
+                <div className="mb-5">
+                  <label className="block text-xs font-medium text-gray-700 mb-1.5">اختر الشهر للإغلاق</label>
+                  <select
+                    value={closeMonth}
+                    onChange={e => setCloseMonth(e.target.value)}
+                    className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    {lastNMonths(12).map(m => (
+                      <option key={m} value={m} disabled={!!(closeDlg.brand.closed_up_to && m <= closeDlg.brand.closed_up_to)}>
+                        {formatYearMonth(m)}{closeDlg.brand.closed_up_to && m <= closeDlg.brand.closed_up_to ? ' (مُغلق)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={doClose}
+                    disabled={closing || !closeMonth}
+                    className="flex-1 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-sm font-medium py-2.5 rounded-lg transition-colors"
+                  >
+                    {closing ? 'جارٍ الإغلاق...' : 'تأكيد الإغلاق'}
+                  </button>
+                  <button
+                    onClick={() => setCloseDlg(null)}
+                    className="px-4 py-2.5 text-sm text-gray-600 border border-gray-200 rounded-lg"
+                  >
+                    إلغاء
+                  </button>
+                </div>
+              </>
+            ) : closeResult.error ? (
+              <>
+                <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700 mb-5">
+                  {closeResult.error}
+                </div>
+                <button onClick={() => setCloseResult(null)} className="text-sm text-blue-600 hover:underline">← المحاولة مجدداً</button>
+              </>
+            ) : (
+              <>
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4 mb-5 space-y-2">
+                  <div className="text-sm font-semibold text-green-800">✓ تم إغلاق {formatYearMonth(closeResult.year_month)}</div>
+                  <div className="grid grid-cols-2 gap-2 text-xs text-gray-700 mt-2">
+                    <div className="bg-white rounded-lg p-2 border border-gray-100">
+                      <div className="text-gray-400">صافي الإيرادات</div>
+                      <div className="font-mono font-bold">
+                        {Number(closeResult.sales_net ?? Number(closeResult.sales) / 1.15).toFixed(2)} ر.س
+                      </div>
+                    </div>
+                    <div className="bg-white rounded-lg p-2 border border-gray-100">
+                      <div className="text-gray-400">COGS</div>
+                      <div className="font-mono font-bold">{Number(closeResult.cogs).toFixed(2)} ر.س</div>
+                    </div>
+                    <div className="bg-white rounded-lg p-2 border border-gray-100">
+                      <div className="text-gray-400">FC%</div>
+                      <div className="font-mono font-bold">{closeResult.fc_pct}%</div>
+                    </div>
+                    <div className="bg-white rounded-lg p-2 border border-gray-100">
+                      <div className="text-gray-400">مخزون ختامي</div>
+                      <div className="font-mono font-bold">{Number(closeResult.ending_inv_value).toFixed(2)} ر.س</div>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setCloseDlg(null)}
+                  className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm py-2.5 rounded-lg"
+                >
+                  إغلاق
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

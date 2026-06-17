@@ -44,6 +44,21 @@ export async function POST(request: NextRequest) {
   const { brand_id, batch_sku, qty_portions, dry_run, note: userNote, performed_by, actuals } = parsed.data
   const admin = createAdminClient()
 
+  // ── Period close guard (للإنتاج الفعلي فقط) ──────────────────────
+  if (!dry_run) {
+    const { data: brandRow } = await (admin.from('brands') as any)
+      .select('closed_up_to').eq('id', brand_id).maybeSingle()
+    if (brandRow?.closed_up_to) {
+      const currentYM = new Date().toISOString().slice(0, 7)
+      if (currentYM <= brandRow.closed_up_to) {
+        return NextResponse.json(
+          { error: `الفترة ${currentYM} مُغلقة — لا يمكن إنتاج دفعات في فترة مُغلقة` },
+          { status: 423 }
+        )
+      }
+    }
+  }
+
   // ── dry_run: حساب بدون كتابة ──────────────────────────────────────
   if (dry_run) {
     const { data: recipeRow, error: recipeErr } = await (admin.from('recipes') as any)
@@ -132,6 +147,17 @@ export async function POST(request: NextRequest) {
 
   if ('error' in result) {
     return NextResponse.json({ error: result.error }, { status: result.status })
+  }
+
+  if (!dry_run) {
+    await (admin.from('audit_logs') as any).insert({
+      brand_id,
+      action:       'batch_produced',
+      entity_type:  'batch',
+      entity_sku:   batch_sku,
+      performed_by: (user as any).id,
+      metadata:     { qty_portions },
+    })
   }
 
   return NextResponse.json(result)

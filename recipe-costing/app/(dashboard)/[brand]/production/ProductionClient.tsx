@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { BrandId } from '@/types'
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -83,6 +84,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
   const [editNote, setEditNote]         = useState('')
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [actionMsg, setActionMsg]       = useState<{ ok: boolean; text: string } | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   // ── Load batches ──────────────────────────────────────────────────
 
@@ -262,19 +264,20 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
     setActionLoading(null)
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('هل أنت متأكد من حذف هذه الجلسة؟ سيتم عكس تأثيرها على المخزون.')) return
-    setActionLoading(id + '_delete')
-    setActionMsg(null)
-    const res = await fetch(`/api/production/sessions/${id}?brand_id=${brand}`, { method: 'DELETE' })
-    const data = await res.json()
-    if (res.ok) {
-      setActionMsg({ ok: true, text: 'تم حذف الجلسة وعكس المخزون' })
-      loadSessions(sessionsOffset)
-    } else {
-      setActionMsg({ ok: false, text: data.error ?? 'خطأ' })
-    }
-    setActionLoading(null)
+  function handleDelete(id: string) {
+    setDlg({ msg: 'هل أنت متأكد من حذف هذه الجلسة؟ سيتم عكس تأثيرها على المخزون.', onOk: async () => {
+      setActionLoading(id + '_delete')
+      setActionMsg(null)
+      const res = await fetch(`/api/production/sessions/${id}?brand_id=${brand}`, { method: 'DELETE' })
+      const data = await res.json()
+      if (res.ok) {
+        setActionMsg({ ok: true, text: 'تم حذف الجلسة وعكس المخزون' })
+        loadSessions(sessionsOffset)
+      } else {
+        setActionMsg({ ok: false, text: data.error ?? 'خطأ' })
+      }
+      setActionLoading(null)
+    }})
   }
 
   async function handleSaveNote(id: string) {
@@ -545,7 +548,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
           )}
 
           {/* Stats cards */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="bg-white border border-gray-200 rounded-xl p-4">
               <div className="text-xs text-gray-500 mb-1">إجمالي الجلسات</div>
               <div className="text-2xl font-bold text-gray-900">{sessionsTotal}</div>
@@ -578,6 +581,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
               <div className="py-12 text-center text-gray-400 text-sm">لا توجد جلسات إنتاج بعد</div>
             ) : (
               <>
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100 text-xs text-gray-500">
@@ -619,12 +623,14 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
                                 <button
                                   onClick={() => handleSaveNote(s.id)}
                                   disabled={actionLoading === s.id + '_note'}
+                                  aria-label="حفظ الملاحظة"
                                   className="text-xs bg-blue-600 text-white px-2 py-1 rounded disabled:opacity-40"
                                 >
                                   {actionLoading === s.id + '_note' ? '...' : '✓'}
                                 </button>
                                 <button
                                   onClick={() => setEditingId(null)}
+                                  aria-label="إلغاء"
                                   className="text-xs text-gray-400 hover:text-red-500 px-1"
                                 >
                                   ✕
@@ -699,6 +705,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
                     ))}
                   </tbody>
                 </table>
+                </div>
 
                 {/* Pagination */}
                 {sessionsTotal > LIMIT && (
@@ -732,6 +739,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
 
       {tab === 'cost-analysis' && <CostAnalysisTab brand={brand} />}
 
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

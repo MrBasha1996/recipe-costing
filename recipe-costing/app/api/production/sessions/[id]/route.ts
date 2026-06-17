@@ -56,7 +56,7 @@ export async function PATCH(
 }
 
 // ── DELETE /api/production/sessions/[id]?brand_id=X ────────────────
-// حذف الجلسة وعكس حركات المخزون (ممنوع إذا كانت معتمدة)
+// حذف الجلسة وعكس حركات المخزون atomic (ممنوع إذا كانت معتمدة)
 export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -70,54 +70,20 @@ export async function DELETE(
   if (isAuthError(user)) return user
 
   const admin = createAdminClient()
-  const got = await getSession(admin, id, brand_id)
-  if ('error' in got) return NextResponse.json({ error: got.error }, { status: got.status })
 
-  if (got.session.status === 'approved') {
-    return NextResponse.json({ error: 'لا يمكن حذف جلسة معتمدة' }, { status: 403 })
+  const { error: rpcErr } = await (admin as any).rpc('delete_production_session', {
+    p_brand_id:   brand_id,
+    p_session_id: id,
+    p_deleted_by: (user as any).id,
+  })
+
+  if (rpcErr) {
+    const msg = rpcErr.message
+    if (msg?.includes('P0001')) return NextResponse.json({ error: 'الجلسة غير موجودة' }, { status: 404 })
+    if (msg?.includes('P0003')) return NextResponse.json({ error: 'لا يمكن حذف جلسة معتمدة' }, { status: 403 })
+    if (msg?.includes('P0004')) return NextResponse.json({ error: msg }, { status: 423 })
+    return NextResponse.json({ error: msg }, { status: 500 })
   }
 
-  // جلب حركات الجلسة لعكس المخزون
-  const { data: movements } = await (admin.from('stock_movements') as any)
-    .select('ing_sku, ing_name, unit, qty, movement_type')
-    .eq('production_session_id', id)
-    .eq('brand_id', brand_id)
-
-  if (movements?.length) {
-    // عكس كل حركة: out→ يُضاف، in→ يُطرح
-    for (const mv of movements as any[]) {
-      const delta = mv.movement_type === 'out' ? mv.qty : -mv.qty
-
-      const { data: stockRow } = await (admin.from('stock_items') as any)
-        .select('current_qty, min_qty, unit')
-        .eq('brand_id', brand_id)
-        .eq('ing_sku', mv.ing_sku)
-        .maybeSingle()
-
-      const currentQty = (stockRow as any)?.current_qty ?? 0
-      await (admin.from('stock_items') as any).upsert({
-        brand_id,
-        ing_sku:     mv.ing_sku,
-        ing_name:    mv.ing_name,
-        unit:        mv.unit,
-        current_qty: Math.max(0, currentQty + delta),
-        min_qty:     (stockRow as any)?.min_qty ?? 0,
-        updated_at:  new Date().toISOString(),
-      }, { onConflict: 'brand_id,ing_sku' })
-    }
-
-    // حذف الحركات
-    await (admin.from('stock_movements') as any)
-      .delete()
-      .eq('production_session_id', id)
-  }
-
-  // حذف الجلسة
-  const { error } = await (admin.from('production_sessions') as any)
-    .delete()
-    .eq('id', id)
-    .eq('brand_id', brand_id)
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ ok: true })
 }

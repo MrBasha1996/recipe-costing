@@ -8,9 +8,10 @@ import { usePermissionsStore } from '@/stores/permissionsStore'
 import { downloadSalesTemplate, parseSalesFile, validateSaleRows } from '@/lib/excel'
 import { VAT_RATE } from '@/lib/calculations'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
-import type { SaleRow, FoodicsCancellationRow, BrandId } from '@/types'
+import type { SaleRow, FoodicsCancellationRow, FoodicsModifierRow, BrandId } from '@/types'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
-type SourceType = 'excel' | 'foodics_sales' | 'foodics_cancel'
+type SourceType = 'excel' | 'foodics_sales' | 'foodics_cancel' | 'foodics_modifiers'
 
 interface BatchSummary {
   import_batch: string; sale_date: string; item_count: number
@@ -36,10 +37,14 @@ export default function SalesClient({ initialBatches, brand }: Props) {
   const [sourceType, setSourceType]         = useState<SourceType | null>(null)
   const [salesPreview, setSalesPreview]     = useState<SaleRow[]>([])
   const [cancelPreview, setCancelPreview]   = useState<FoodicsCancellationRow[]>([])
+  const [modifierPreview, setModifierPreview] = useState<FoodicsModifierRow[]>([])
+  const [modifierDateFrom, setModifierDateFrom] = useState<string>('')
+  const [modifierDateTo, setModifierDateTo]     = useState<string>('')
   const [parseError, setParseError]         = useState<string | null>(null)
   const [importing, setImporting]           = useState(false)
   const [importMsg, setImportMsg]           = useState<{ ok: boolean; text: string } | null>(null)
   const [deletingBatch, setDeletingBatch]   = useState<string | null>(null)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [detectedDate, setDetectedDate]     = useState<string>('')
   const [lastImportBatch, setLastImportBatch]   = useState<string | null>(null)
   const [showExplodePanel, setShowExplodePanel] = useState(false)
@@ -52,6 +57,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
 
   function resetPreview() {
     setSourceType(null); setSalesPreview([]); setCancelPreview([])
+    setModifierPreview([]); setModifierDateFrom(''); setModifierDateTo('')
     setParseError(null); setImportMsg(null); setDetectedDate('')
   }
 
@@ -65,6 +71,9 @@ export default function SalesClient({ initialBatches, brand }: Props) {
         setSourceType('foodics_sales'); setSalesPreview(result.sales); setDetectedDate(result.date)
       } else if (result.type === 'cancellations' && result.cancellations.length > 0) {
         setSourceType('foodics_cancel'); setCancelPreview(result.cancellations); setDetectedDate(result.date)
+      } else if (result.type === 'modifiers' && result.modifiers.length > 0) {
+        setSourceType('foodics_modifiers'); setModifierPreview(result.modifiers)
+        setModifierDateFrom(result.dateFrom); setModifierDateTo(result.dateTo)
       } else {
         const rows = await parseSalesFile(file)
         if (rows.length === 0) { setParseError('لم يتم العثور على بيانات صالحة في الملف'); return }
@@ -126,13 +135,47 @@ export default function SalesClient({ initialBatches, brand }: Props) {
     } finally { setImporting(false) }
   }
 
-  async function handleDeleteBatch(batchId: string) {
-    if (!confirm('حذف هذه الدفعة من سجل المبيعات؟')) return
-    setDeletingBatch(batchId)
-    const supabase = createClient()
-    await (supabase.from('daily_sales') as any).delete().eq('import_batch', batchId)
-    setDeletingBatch(null)
-    router.refresh()
+  async function handleImportModifiers() {
+    if (modifierPreview.length === 0) return
+    if (!modifierDateFrom || !modifierDateTo) {
+      setImportMsg({ ok: false, text: 'يرجى تحديد الفترة الزمنية للاستيراد' }); return
+    }
+    setImporting(true); setImportMsg(null)
+    try {
+      const supabase = createClient()
+      // Period close guard
+      const { data: brandRow } = await (supabase.from('brands') as any)
+        .select('closed_up_to').eq('id', brand).single()
+      if (brandRow?.closed_up_to && modifierDateFrom <= brandRow.closed_up_to) {
+        setImportMsg({ ok: false, text: `الفترة مغلقة حتى ${brandRow.closed_up_to} — لا يمكن استيراد بيانات تبدأ من ${modifierDateFrom}` })
+        return
+      }
+      const batchId = crypto.randomUUID()
+      const rows = modifierPreview.map(r => ({
+        brand_id: brand as string,
+        date_from: modifierDateFrom, date_to: modifierDateTo,
+        option_sku: r.option_sku, option_name: r.option_name,
+        product_sku: r.product_sku, product_name: r.product_name,
+        qty_sold: r.qty_sold, revenue: r.revenue,
+        import_batch: batchId, imported_by: profile?.id ?? null,
+      }))
+      const { error } = await (supabase.from('modifier_sales') as any).insert(rows)
+      if (error) throw error
+      setImportMsg({ ok: true, text: `تم استيراد ${rows.length} سجل إضافات بنجاح — ستُحتسب تكاليفها تلقائياً عند احتساب التكلفة` })
+      setModifierPreview([]); setSourceType(null)
+    } catch (err: any) {
+      setImportMsg({ ok: false, text: `خطأ: ${err.message}` })
+    } finally { setImporting(false) }
+  }
+
+  function handleDeleteBatch(batchId: string) {
+    setDlg({ msg: 'حذف هذه الدفعة من سجل المبيعات؟', onOk: async () => {
+      setDeletingBatch(batchId)
+      const supabase = createClient()
+      await (supabase.from('daily_sales') as any).delete().eq('import_batch', batchId)
+      setDeletingBatch(null)
+      router.refresh()
+    }})
   }
 
   async function handleExplodeCheck() {
@@ -202,9 +245,10 @@ export default function SalesClient({ initialBatches, brand }: Props) {
         <div className="text-4xl mb-3">📊</div>
         <p className="text-gray-600 font-medium">اضغط لاختيار ملف</p>
         <p className="text-gray-400 text-sm mt-1">Foodics Export (.xlsx) أو Excel عام</p>
-        <div className="flex items-center justify-center gap-4 mt-3">
+        <div className="flex items-center justify-center gap-3 mt-3 flex-wrap">
           <span className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-full">📋 مبيعات Foodics</span>
           <span className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-full">🗑 إلغاءات Foodics</span>
+          <span className="text-xs bg-purple-50 text-purple-600 px-2 py-1 rounded-full">➕ إضافات Foodics</span>
           <span className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-full">📄 Excel عام</span>
         </div>
         <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={handleFile} />
@@ -275,10 +319,10 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                       <div className="text-gray-400 font-mono text-xs">{r.product_sku}</div>
                     </td>
                     <td className="px-3 py-2 text-xs text-gray-500">{r.branch_ref}</td>
-                    <td className="px-3 py-2 text-left font-mono text-xs text-gray-700">{r.qty_sold}</td>
-                    <td className="px-3 py-2 text-left font-mono text-xs font-semibold text-green-700">{r.revenue.toFixed(2)}</td>
-                    <td className="px-3 py-2 text-left font-mono text-xs text-gray-400">{(r.tax_amount ?? 0).toFixed(2)}</td>
-                    <td className="px-3 py-2 text-left font-mono text-xs text-red-400">
+                    <td className="px-3 py-2 text-end font-mono text-xs text-gray-700">{r.qty_sold}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs font-semibold text-green-700">{r.revenue.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs text-gray-400">{(r.tax_amount ?? 0).toFixed(2)}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs text-red-400">
                       {(r.cancel_qty ?? 0) > 0 ? `${r.cancel_qty} / ${(r.cancel_amount ?? 0).toFixed(0)}` : '—'}
                     </td>
                   </tr>
@@ -288,7 +332,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
           </div>
           <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between flex-wrap gap-3">
             {importMsg && <span className={`text-sm ${importMsg.ok ? 'text-green-600' : 'text-red-600'}`}>{importMsg.text}</span>}
-            <div className="flex gap-2 mr-auto">
+            <div className="flex gap-2 ms-auto">
               <button onClick={resetPreview} className="text-sm px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">إلغاء</button>
               <button onClick={handleImportSales} disabled={importing}
                 className="text-sm px-5 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg font-medium disabled:opacity-50 transition-colors">
@@ -334,8 +378,8 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                         {WASTE_TYPE_LABEL[r.waste_type]}
                       </span>
                     </td>
-                    <td className="px-3 py-2 text-left font-mono text-xs">{r.qty}</td>
-                    <td className="px-3 py-2 text-left font-mono text-xs text-red-600">{r.value.toFixed(2)}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs">{r.qty}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs text-red-600">{r.value.toFixed(2)}</td>
                     <td className="px-3 py-2 text-right text-xs text-gray-500">{r.reason}</td>
                     <td className="px-3 py-2 text-center text-xs">
                       {r.was_wasted ? <span className="text-orange-600">نعم</span> : <span className="text-gray-300">—</span>}
@@ -347,11 +391,72 @@ export default function SalesClient({ initialBatches, brand }: Props) {
           </div>
           <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between flex-wrap gap-3">
             {importMsg && <span className={`text-sm ${importMsg.ok ? 'text-green-600' : 'text-red-600'}`}>{importMsg.text}</span>}
-            <div className="flex gap-2 mr-auto">
+            <div className="flex gap-2 ms-auto">
               <button onClick={resetPreview} className="text-sm px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">إلغاء</button>
               <button onClick={handleImportCancellations} disabled={importing}
                 className="text-sm px-5 py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg font-medium disabled:opacity-50">
                 {importing ? 'جارٍ الاستيراد...' : `استيراد ${cancelPreview.length} سجل`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modifiers Preview */}
+      {sourceType === 'foodics_modifiers' && modifierPreview.length > 0 && (
+        <div className="bg-white border border-purple-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-purple-200 bg-purple-50">
+            <div className="flex items-center gap-3 mb-3">
+              <span className="text-xs font-semibold bg-purple-100 text-purple-700 px-2.5 py-1 rounded-full">Foodics — إضافات الأصناف</span>
+              <span className="text-sm text-gray-600">{modifierPreview.length} سجل</span>
+              <span className="font-mono text-sm text-purple-700 font-semibold">
+                {modifierPreview.reduce((s, r) => s + r.qty_sold, 0).toFixed(0)} إضافة
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2 text-sm">
+                <label className="text-gray-500 whitespace-nowrap">من:</label>
+                <input type="date" value={modifierDateFrom} onChange={e => setModifierDateFrom(e.target.value)}
+                  className="border border-purple-200 rounded-lg px-2 py-1 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-300" />
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <label className="text-gray-500 whitespace-nowrap">إلى:</label>
+                <input type="date" value={modifierDateTo} onChange={e => setModifierDateTo(e.target.value)}
+                  className="border border-purple-200 rounded-lg px-2 py-1 text-sm font-mono text-gray-700 focus:outline-none focus:ring-2 focus:ring-purple-300" />
+              </div>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-64">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-xs text-gray-500">
+                  <th className="text-right px-3 py-2.5 font-medium">خيار الإضافة</th>
+                  <th className="text-right px-3 py-2.5 font-medium">كود الخيار</th>
+                  <th className="text-right px-3 py-2.5 font-medium">المنتج</th>
+                  <th className="text-left px-3 py-2.5 font-medium">الكمية</th>
+                  <th className="text-left px-3 py-2.5 font-medium">الإيراد</th>
+                </tr>
+              </thead>
+              <tbody>
+                {modifierPreview.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-800 text-xs font-medium">{r.option_name}</td>
+                    <td className="px-3 py-2 font-mono text-xs text-gray-400">{r.option_sku || '—'}</td>
+                    <td className="px-3 py-2 text-xs text-gray-600">{r.product_name}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs text-gray-700">{r.qty_sold}</td>
+                    <td className="px-3 py-2 text-end font-mono text-xs text-purple-700 font-semibold">{r.revenue.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between flex-wrap gap-3">
+            {importMsg && <span className={`text-sm ${importMsg.ok ? 'text-green-600' : 'text-red-600'}`}>{importMsg.text}</span>}
+            <div className="flex gap-2 ms-auto">
+              <button onClick={resetPreview} className="text-sm px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600">إلغاء</button>
+              <button onClick={handleImportModifiers} disabled={importing}
+                className="text-sm px-5 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-medium disabled:opacity-50">
+                {importing ? 'جارٍ الاستيراد...' : `استيراد ${modifierPreview.length} سجل`}
               </button>
             </div>
           </div>
@@ -383,8 +488,8 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                     <td className="px-4 py-2 font-mono text-xs text-gray-500">{r.sale_date}</td>
                     <td className="px-4 py-2 text-gray-800 font-medium text-xs">{r.product_name}</td>
                     <td className="px-4 py-2 text-gray-400 font-mono text-xs">{r.product_sku || '—'}</td>
-                    <td className="px-4 py-2 text-left font-mono text-xs text-gray-700">{r.qty_sold}</td>
-                    <td className="px-4 py-2 text-left font-mono text-xs font-semibold text-green-700">{r.revenue.toFixed(2)}</td>
+                    <td className="px-4 py-2 text-end font-mono text-xs text-gray-700">{r.qty_sold}</td>
+                    <td className="px-4 py-2 text-end font-mono text-xs font-semibold text-green-700">{r.revenue.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -547,8 +652,8 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-center text-gray-600">{b.item_count}</td>
-                  <td className="px-4 py-3 text-left font-mono text-gray-700">{b.total_qty.toFixed(0)}</td>
-                  <td className="px-4 py-3 text-left font-mono font-semibold text-gray-800">{b.total_revenue.toFixed(2)} ر.س</td>
+                  <td className="px-4 py-3 text-end font-mono text-gray-700">{b.total_qty.toFixed(0)}</td>
+                  <td className="px-4 py-3 text-end font-mono font-semibold text-gray-800">{b.total_revenue.toFixed(2)} ر.س</td>
                   <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                     {b.exploded_at ? (
                       <span className="text-xs text-green-600 font-medium">✓ محتسب</span>
@@ -559,8 +664,8 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                       </button>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-left text-xs text-gray-400 font-mono">{new Date(b.imported_at).toLocaleString('en-US')}</td>
-                  <td className="px-4 py-3 text-left" onClick={e => e.stopPropagation()}>
+                  <td className="px-4 py-3 text-end text-xs text-gray-400 font-mono">{new Date(b.imported_at).toLocaleString('en-US')}</td>
+                  <td className="px-4 py-3 text-end" onClick={e => e.stopPropagation()}>
                     <button onClick={() => handleDeleteBatch(b.import_batch)} disabled={deletingBatch === b.import_batch}
                       className="text-xs text-red-500 hover:text-red-700 disabled:opacity-40">حذف</button>
                   </td>
@@ -570,6 +675,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
           </table>
         )}
       </div>
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </div>
   )
 }

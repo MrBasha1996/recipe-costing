@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 
   // ── 1. تجميع المبيعات ─────────────────────────────────────────────
   const { data: sales, error: salesErr } = await (admin.from('daily_sales') as any)
-    .select('product_sku, product_name, qty_sold')
+    .select('product_sku, product_name, qty_sold, sale_date')
     .eq('brand_id', brand_id)
     .eq('import_batch', import_batch)
 
@@ -153,6 +153,24 @@ export async function POST(request: NextRequest) {
         .in('recipe_id', recipeIds)
     : { data: [] }
 
+  // ── 3b. Unit conversions (عادية + كومبو في استعلام واحد) ────────
+  const allIngSkus = [
+    ...new Set([
+      ...(ings || []).map((i: any) => i.ing_sku as string),
+      ...comboExpansions.flatMap(exp =>
+        [...exp.compIngsByRecipeId.values()].flatMap(arr => arr.map((i: any) => i.ing_sku as string))
+      ),
+    ])
+  ]
+  const { data: ucRows } = allIngSkus.length > 0
+    ? await (admin.from('unit_conversions') as any)
+        .select('ing_sku, factor')
+        .eq('brand_id', brand_id)
+        .in('ing_sku', allIngSkus)
+    : { data: [] }
+  const ucMap = new Map<string, number>()
+  for (const uc of (ucRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
+
   // ── 4. تجميع الاحتياجات (عادية + كومبو) ─────────────────────────
   const rawNeeds  = new Map<string, { name: string; unit: string; needed: number }>()
   const batchNeeds = new Map<string, { name: string; unit: string; needed: number }>()
@@ -171,7 +189,8 @@ export async function POST(request: NextRequest) {
     const recipeIngs = (ings || []).filter((i: any) => i.recipe_id === recipe.id)
     for (const ing of recipeIngs as any[]) {
       if ((ing.yield_pct ?? 0) <= 0) continue
-      const needed = (ing.qty / (ing.yield_pct / 100)) / recipe.yield_portions * sale.qty
+      const factor = ucMap.get(ing.ing_sku) ?? 1
+      const needed = ((ing.qty / (ing.yield_pct / 100)) / recipe.yield_portions * sale.qty) / factor
       addNeed(ing, needed)
     }
   }
@@ -183,8 +202,69 @@ export async function POST(request: NextRequest) {
       const itemIngs = expansion.compIngsByRecipeId.get(item.recipe.id) ?? []
       for (const ing of itemIngs as any[]) {
         if ((ing.yield_pct ?? 0) <= 0) continue
-        const needed = (ing.qty / (ing.yield_pct / 100)) / item.recipe.yield_portions * item.qty * expansion.qtySold
+        const factor = ucMap.get(ing.ing_sku) ?? 1
+        const needed = ((ing.qty / (ing.yield_pct / 100)) / item.recipe.yield_portions * item.qty * expansion.qtySold) / factor
         addNeed(ing, needed)
+      }
+    }
+  }
+
+  // ── 4c. مكونات الإضافات المرتبطة بهذه الفترة ─────────────────────
+  const saleDates = (sales as any[]).map((r: any) => r.sale_date as string)
+  const minDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a < b ? a : b) : null
+  const maxDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a > b ? a : b) : null
+
+  if (minDate && maxDate) {
+    const { data: modSales } = await (admin.from('modifier_sales') as any)
+      .select('option_sku, qty_sold')
+      .eq('brand_id', brand_id)
+      .is('exploded_at', null)
+      .lte('date_from', maxDate)
+      .gte('date_to', minDate)
+
+    const modSalesList = (modSales || []) as any[]
+    if (modSalesList.length > 0) {
+      const optionSkus = [...new Set(modSalesList.map((r: any) => r.option_sku as string))]
+
+      const { data: modOptions } = await (admin.from('modifier_options') as any)
+        .select('id, option_sku')
+        .eq('brand_id', brand_id)
+        .in('option_sku', optionSkus)
+
+      const optionSkuToId = new Map<string, string>()
+      for (const opt of (modOptions || []) as any[]) optionSkuToId.set(opt.option_sku, opt.id)
+
+      const optionIds = [...optionSkuToId.values()]
+      if (optionIds.length > 0) {
+        const { data: modIngs } = await (admin.from('modifier_option_ingredients') as any)
+          .select('option_id, ing_sku, ing_name, qty, yield_pct, unit')
+          .in('option_id', optionIds)
+
+        const ingsByOptionId = new Map<string, any[]>()
+        for (const ing of (modIngs || []) as any[]) {
+          if (!ingsByOptionId.has(ing.option_id)) ingsByOptionId.set(ing.option_id, [])
+          ingsByOptionId.get(ing.option_id)!.push(ing)
+        }
+
+        // Identify semi-products among modifier ingredients
+        const modIngSkus = [...new Set((modIngs || []).map((i: any) => i.ing_sku as string))]
+        const semiSkus   = new Set<string>()
+        if (modIngSkus.length > 0) {
+          const { data: semiProducts } = await (admin.from('products') as any)
+            .select('sku').eq('brand_id', brand_id).eq('is_semi', true).in('sku', modIngSkus)
+          for (const p of (semiProducts || []) as any[]) semiSkus.add(p.sku)
+        }
+
+        for (const sale of modSalesList) {
+          const optId = optionSkuToId.get(sale.option_sku)
+          if (!optId) continue
+          const ings = ingsByOptionId.get(optId) ?? []
+          for (const ing of ings as any[]) {
+            if ((ing.yield_pct ?? 0) <= 0) continue
+            const needed = (ing.qty / (ing.yield_pct / 100)) * sale.qty_sold
+            addNeed({ ...ing, is_semi: semiSkus.has(ing.ing_sku) }, needed)
+          }
+        }
       }
     }
   }

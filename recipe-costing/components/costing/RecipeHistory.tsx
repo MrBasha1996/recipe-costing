@@ -99,7 +99,7 @@ export default function RecipeHistory({ open, onClose, sku, brand, ingSkus }: Pr
       />
 
       {/* Drawer */}
-      <div className="fixed inset-y-0 left-0 w-80 bg-white border-r border-gray-200 z-50 flex flex-col shadow-xl">
+      <div className="fixed inset-y-0 right-0 w-80 bg-white border-l border-gray-200 z-50 flex flex-col shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
           <div>

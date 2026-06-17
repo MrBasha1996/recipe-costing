@@ -43,9 +43,27 @@ export async function POST(request: NextRequest) {
   const { brand_id, import_batch, auto_produce_batches, performed_by } = parsed.data
   const admin = createAdminClient()
 
+  // ── 0. Period close guard ─────────────────────────────────────────
+  const { data: brandRow } = await (admin.from('brands') as any)
+    .select('closed_up_to').eq('id', brand_id).maybeSingle()
+  if (brandRow?.closed_up_to) {
+    const { data: earliestRow } = await (admin.from('daily_sales') as any)
+      .select('sale_date').eq('brand_id', brand_id).eq('import_batch', import_batch)
+      .order('sale_date', { ascending: true }).limit(1).maybeSingle()
+    if (earliestRow?.sale_date) {
+      const batchYM = (earliestRow.sale_date as string).slice(0, 7)
+      if (batchYM <= brandRow.closed_up_to) {
+        return NextResponse.json(
+          { error: `الفترة ${batchYM} مُغلقة — لا يمكن تطبيق مبيعات بتاريخ مُغلق` },
+          { status: 423 }
+        )
+      }
+    }
+  }
+
   // ── 1. Fetch sales for this batch ─────────────────────────────────
   const { data: sales, error: salesErr } = await (admin.from('daily_sales') as any)
-    .select('id, product_sku, product_name, qty_sold')
+    .select('id, product_sku, product_name, qty_sold, sale_date')
     .eq('brand_id', brand_id)
     .eq('import_batch', import_batch)
 
@@ -104,6 +122,8 @@ export async function POST(request: NextRequest) {
   const deductMap = new Map<string, { name: string; qty: number }>()
   let exploded = 0
   let skipped = 0
+  const modifierSalesIds: string[] = []
+  const modSemiSkus = new Set<string>()
 
   for (const [productSku, qtySold] of saleMap) {
     const recipe = recipeMap.get(productSku)
@@ -210,6 +230,79 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // ── 4c. Modifier ingredient deductions ────────────────────────────
+  // Fetch modifier_sales overlapping this batch's date range and deduct their ingredient quantities
+  const saleDates = (sales as any[]).map((r: any) => r.sale_date as string)
+  const minDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a < b ? a : b) : null
+  const maxDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a > b ? a : b) : null
+
+  if (minDate && maxDate) {
+    const { data: modSales } = await (admin.from('modifier_sales') as any)
+      .select('id, option_sku, qty_sold')
+      .eq('brand_id', brand_id)
+      .is('exploded_at', null)
+      .lte('date_from', maxDate)
+      .gte('date_to', minDate)
+
+    const modSalesList = (modSales || []) as any[]
+    if (modSalesList.length > 0) {
+      for (const r of modSalesList) modifierSalesIds.push(r.id)
+      const optionSkus = [...new Set(modSalesList.map((r: any) => r.option_sku as string))]
+
+      const { data: modOptions } = await (admin.from('modifier_options') as any)
+        .select('id, option_sku')
+        .eq('brand_id', brand_id)
+        .in('option_sku', optionSkus)
+
+      const optionSkuToId = new Map<string, string>()
+      for (const opt of (modOptions || []) as any[]) optionSkuToId.set(opt.option_sku, opt.id)
+
+      const optionIds = [...optionSkuToId.values()]
+      if (optionIds.length > 0) {
+        const { data: modIngs } = await (admin.from('modifier_option_ingredients') as any)
+          .select('option_id, ing_sku, ing_name, qty, yield_pct')
+          .in('option_id', optionIds)
+
+        const ingsByOptionId = new Map<string, any[]>()
+        for (const ing of (modIngs || []) as any[]) {
+          if (!ingsByOptionId.has(ing.option_id)) ingsByOptionId.set(ing.option_id, [])
+          ingsByOptionId.get(ing.option_id)!.push(ing)
+        }
+
+        // Extend ucMap for any new modifier ingredient SKUs
+        const newModIngSkus = ([...new Set((modIngs || []).map((i: any) => i.ing_sku as string))] as string[])
+          .filter(s => !ucMap.has(s))
+        if (newModIngSkus.length > 0) {
+          const { data: modUcRows } = await (admin.from('unit_conversions') as any)
+            .select('ing_sku, factor').eq('brand_id', brand_id).in('ing_sku', newModIngSkus)
+          for (const uc of (modUcRows || []) as any[]) ucMap.set(uc.ing_sku, uc.factor)
+        }
+
+        // Identify semi-products among modifier ingredients (for auto_produce in step 5)
+        const allModIngSkus = [...new Set((modIngs || []).map((i: any) => i.ing_sku as string))]
+        if (allModIngSkus.length > 0) {
+          const { data: semiProds } = await (admin.from('products') as any)
+            .select('sku').eq('brand_id', brand_id).eq('is_semi', true).in('sku', allModIngSkus)
+          for (const p of (semiProds || []) as any[]) modSemiSkus.add(p.sku)
+        }
+
+        for (const sale of modSalesList) {
+          const optId = optionSkuToId.get(sale.option_sku)
+          if (!optId) continue
+          const ings = ingsByOptionId.get(optId) ?? []
+          for (const ing of ings as any[]) {
+            if ((ing.yield_pct ?? 0) <= 0) continue
+            const factor  = ucMap.get(ing.ing_sku) ?? 1
+            const needed  = ((ing.qty / (ing.yield_pct / 100)) * sale.qty_sold) / factor
+            const existing = deductMap.get(ing.ing_sku)
+            if (existing) existing.qty += needed
+            else deductMap.set(ing.ing_sku, { name: ing.ing_name, qty: needed })
+          }
+        }
+      }
+    }
+  }
+
   if (!deductMap.size) {
     return NextResponse.json({ exploded, skipped, note: 'لا توجد مكونات للخصم' })
   }
@@ -222,6 +315,7 @@ export async function POST(request: NextRequest) {
     for (const ing of (ingredients || []) as any[]) {
       if (ing.is_semi) batchIngSkus.add(ing.ing_sku)
     }
+    for (const sku of modSemiSkus) batchIngSkus.add(sku)
 
     if (batchIngSkus.size > 0) {
       const { data: batchStocks } = await (admin.from('stock_items') as any)
@@ -312,6 +406,22 @@ export async function POST(request: NextRequest) {
   })
 
   if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 })
+
+  // Mark modifier_sales records as exploded
+  if (modifierSalesIds.length > 0) {
+    await (admin.from('modifier_sales') as any)
+      .update({ exploded_at: new Date().toISOString() })
+      .in('id', modifierSalesIds)
+  }
+
+  await (admin.from('audit_logs') as any).insert({
+    brand_id,
+    action:       'sales_exploded',
+    entity_type:  'sale_batch',
+    entity_sku:   import_batch,
+    performed_by: (user as any).id,
+    metadata: { exploded, skipped, deducted: deductMap.size },
+  })
 
   return NextResponse.json({
     ok: true,

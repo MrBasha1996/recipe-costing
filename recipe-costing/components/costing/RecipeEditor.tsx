@@ -17,6 +17,7 @@ import RecipeChartsRow from '@/components/costing/RecipeChartsRow'
 import RecipePriceHistory from '@/components/costing/RecipePriceHistory'
 import RecipeHistory from '@/components/costing/RecipeHistory'
 import RecipeVersionDiff from '@/components/costing/RecipeVersionDiff'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { usePeriod } from '@/hooks/usePeriod'
 import { formatYearMonth } from '@/lib/period'
 import type { ComponentItem, RecipeIngredientRow, RecipeRowDraft, ServiceType, Recipe } from '@/types'
@@ -74,6 +75,7 @@ export default function RecipeEditor() {
   const [creatingVersion, setCreatingVersion] = useState(false)
   const [approving, setApproving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
 
   const { isCurrentClosed, currentYM } = usePeriod()
 
@@ -419,9 +421,13 @@ export default function RecipeEditor() {
     }
   }
 
-  async function handleDeleteVersion() {
+  function handleDeleteVersion() {
     if (!savedRecipe || !currentProduct) return
-    if (!window.confirm(`هل تريد حذف إصدار ${savedRecipe.version}؟ لا يمكن التراجع.`)) return
+    setDlg({ msg: `هل تريد حذف إصدار ${savedRecipe.version}؟ لا يمكن التراجع.`, onOk: doDeleteVersion })
+  }
+
+  async function doDeleteVersion() {
+    if (!savedRecipe || !currentProduct) return
     setDeleting(true)
     setSaveMsg(null)
     try {
@@ -1230,6 +1236,7 @@ export default function RecipeEditor() {
         productName={currentProduct.name}
       />
 
+      {dlg && <ConfirmDialog message={dlg.msg} onConfirm={() => { dlg.onOk(); setDlg(null) }} onCancel={() => setDlg(null)} />}
     </>
   )
 }
