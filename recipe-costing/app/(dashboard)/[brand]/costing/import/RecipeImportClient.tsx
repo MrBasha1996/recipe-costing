@@ -3,6 +3,7 @@
 import { useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import {
   downloadRecipeImportTemplate,
   downloadBatchRecipeImportTemplate,
@@ -402,6 +403,7 @@ function ProductSection({
 
 export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: BrandId; mode?: ImportMode }) {
   const { profile } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
 
   const [step, setStep] = useState<Step>('upload')
   const [dragging, setDragging] = useState(false)
@@ -514,6 +516,7 @@ export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: Br
 
     setCreateError(null)
     setCreatingItems(true)
+    startLoading('جارٍ إنشاء المواد الجديدة...')
     try {
       const supabase = createClient()
 
@@ -591,6 +594,7 @@ export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: Br
     } finally {
       setCreatingItems(false)
       setAnalyzing(false)
+      stopLoading()
     }
   }
 
@@ -637,6 +641,7 @@ export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: Br
   async function handleImport() {
     if (!analysis || selectedKeys.size === 0) return
     setImporting(true)
+    startLoading('جارٍ استيراد الوصفات...')
     try {
       const supabase = createClient()
       const result = await executeImport(selectedKeys, modes, analysis, brand, profile?.id ?? null, supabase)
@@ -651,6 +656,7 @@ export default function RecipeImportClient({ brand, mode = 'meal' }: { brand: Br
       setGlobalError(e.message)
     } finally {
       setImporting(false)
+      stopLoading()
     }
   }
 

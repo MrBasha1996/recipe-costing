@@ -11,7 +11,7 @@ const PROFILE_TTL = 30_000   // 30 sec
 
 async function getValidBrands(supabase: any): Promise<string[]> {
   if (Date.now() < _brandsCache.exp) return _brandsCache.data
-  const { data } = await supabase.from('brands').select('id')
+  const { data } = await supabase.from('brands').select('id').eq('is_standalone', false)
   _brandsCache.data = (data ?? []).map((b: any) => b.id as string)
   _brandsCache.exp  = Date.now() + BRANDS_TTL
   return _brandsCache.data
@@ -83,10 +83,7 @@ export async function middleware(request: NextRequest) {
     },
   )
 
-  // getSession() reads the JWT from the cookie locally — no network round-trip.
-  // Security boundaries are enforced in layout (getUser) and API routes (requireModulePermission).
-  const { data: { session } } = await supabase.auth.getSession()
-  const user = session?.user ?? null
+  const { data: { user } } = await supabase.auth.getUser()
   const { pathname } = request.nextUrl
 
   if (pathname.startsWith('/login')) {

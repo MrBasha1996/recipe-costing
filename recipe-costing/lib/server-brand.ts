@@ -4,7 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 /** Returns the list of valid brand IDs from the database. */
 export async function getValidBrands(): Promise<string[]> {
   const supabase = await createClient()
-  const { data } = await (supabase.from('brands') as any).select('id')
+  const { data } = await (supabase.from('brands') as any).select('id').eq('is_standalone', false)
   return (data ?? []).map((b: any) => b.id as string)
 }
 

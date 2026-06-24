@@ -60,6 +60,16 @@ export async function executeBatchProduce(
 
     if (!needs.length) return { error: 'لا توجد كميات فعلية صالحة', status: 400 }
 
+    // حساب batch_value من أسعار المكونات الحالية
+    const actIngSkus = needs.map(n => n.sku)
+    const { data: actCostRows } = await (admin.from('ingredients') as any)
+      .select('sku, cost')
+      .eq('brand_id', brand_id)
+      .in('sku', actIngSkus)
+    const costMap = new Map<string, number>()
+    for (const r of (actCostRows || []) as any[]) costMap.set(r.sku, r.cost ?? 0)
+    costEstimate = needs.reduce((sum, n) => sum + n.needed * (costMap.get(n.sku) ?? 0), 0)
+
   } else {
     // ── مسار الوصفة (الافتراضي) ──────────────────────────────────
     const { data: recipeRow, error: recipeErr } = await (admin.from('recipes') as any)

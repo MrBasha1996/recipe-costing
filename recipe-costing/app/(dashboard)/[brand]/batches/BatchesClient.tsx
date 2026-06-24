@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { exportBatches, importBatches, downloadBatchesTemplate } from '@/lib/dataImportExport'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import type { BatchProduct, BrandId } from '@/types'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
@@ -12,6 +13,7 @@ const inputCls = 'w-full border border-gray-300 rounded-lg px-3 py-2 text-sm tex
 
 export default function BatchesClient({ brand }: { brand: BrandId }) {
   const { canEdit } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const canE = canEdit('costing')
 
   const [batches, setBatches] = useState<BatchProduct[]>([])
@@ -84,15 +86,19 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
 
   function handleDelete(b: BatchProduct) {
     setDlg({ msg: `هل تريد حذف "${b.name}"؟ سيتم حذف وصفاته أيضاً.`, onOk: async () => {
-      const supabase = createClient()
-      const { data: recipes } = await (supabase.from('recipes') as any)
-        .select('id').eq('sku', b.sku).eq('brand_id', brand).eq('is_semi', true)
-      for (const rec of recipes || []) {
-        await (supabase.from('recipe_ingredients') as any).delete().eq('recipe_id', rec.id)
-        await (supabase.from('recipes') as any).delete().eq('id', rec.id)
+      startLoading('جارٍ حذف الباتش...')
+      try {
+        const supabase = createClient()
+        const { data: recipes } = await (supabase.from('recipes') as any)
+          .select('id').eq('sku', b.sku).eq('brand_id', brand).eq('is_semi', true)
+        for (const rec of recipes || []) {
+          await (supabase.from('recipes') as any).update({ deleted_at: new Date().toISOString() }).eq('id', rec.id)
+        }
+        await (supabase.from('batches') as any).delete().eq('sku', b.sku).eq('brand_id', brand)
+        await load()
+      } finally {
+        stopLoading()
       }
-      await (supabase.from('batches') as any).delete().eq('sku', b.sku).eq('brand_id', brand)
-      await load()
     }})
   }
 
@@ -111,6 +117,7 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
     e.target.value = ''
     setImporting(true)
     setMsg(null)
+    startLoading('جارٍ استيراد الباتشات...')
     const supabase = createClient()
     try {
       const result = await importBatches(file, brand, supabase)
@@ -121,6 +128,7 @@ export default function BatchesClient({ brand }: { brand: BrandId }) {
       setMsg({ ok: false, text: `خطأ: ${e.message}` })
     } finally {
       setImporting(false)
+      stopLoading()
     }
   }
 

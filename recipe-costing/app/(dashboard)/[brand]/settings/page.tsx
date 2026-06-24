@@ -8,7 +8,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ brand
   const supabase = await createClient()
 
   const { data } = await (supabase.from('brands') as any)
-    .select('delivery_commission_pct, fc_target_low, fc_target_high')
+    .select('delivery_commission_pct, fc_target_low, fc_target_high, tax_reg_number')
     .eq('id', brand)
     .single()
 
@@ -17,6 +17,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ brand
       initialCommission={data?.delivery_commission_pct ?? 0}
       initialFcLow={data?.fc_target_low ?? 35}
       initialFcHigh={data?.fc_target_high ?? 45}
+      initialTrn={data?.tax_reg_number ?? ''}
     />
   )
 }

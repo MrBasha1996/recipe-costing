@@ -20,7 +20,11 @@ interface FormState {
   fc_target_high: string
   logo_url: string
   primary_color: string
+  sidebar_color: string
+  secondary_color: string
   delivery_commission_pct: string
+  is_standalone: boolean
+  external_url: string
 }
 
 const EMPTY_FORM: FormState = {
@@ -31,7 +35,11 @@ const EMPTY_FORM: FormState = {
   fc_target_high: '45',
   logo_url: '',
   primary_color: '#3b82f6',
+  sidebar_color: '#1c1c2e',
+  secondary_color: '#8b5cf6',
   delivery_commission_pct: '0',
+  is_standalone: false,
+  external_url: '',
 }
 
 export default function BrandsPage() {
@@ -58,7 +66,7 @@ export default function BrandsPage() {
     setLoading(true)
     const supabase = createClient()
     const { data: brandData } = await (supabase.from('brands') as any)
-      .select('id, name, name_ar, fc_target_low, fc_target_high, logo_url, primary_color, delivery_commission_pct, closed_up_to')
+      .select('id, name, name_ar, fc_target_low, fc_target_high, logo_url, primary_color, sidebar_color, secondary_color, delivery_commission_pct, closed_up_to, is_standalone, external_url')
       .order('id')
 
     const { data: userData } = await (supabase.from('user_profiles') as any)
@@ -97,7 +105,11 @@ export default function BrandsPage() {
       fc_target_high: String(b.fc_target_high ?? 45),
       logo_url: b.logo_url ?? '',
       primary_color: b.primary_color ?? '#3b82f6',
+      sidebar_color: (b as any).sidebar_color ?? '#1c1c2e',
+      secondary_color: (b as any).secondary_color ?? '#8b5cf6',
       delivery_commission_pct: String(b.delivery_commission_pct ?? 0),
+      is_standalone: b.is_standalone ?? false,
+      external_url: b.external_url ?? '',
     })
     setError('')
     setShowForm(true)
@@ -120,6 +132,10 @@ export default function BrandsPage() {
       setError('نسبة العمولة يجب أن تكون بين 0 و100')
       return
     }
+    if (form.is_standalone && !form.external_url.trim()) {
+      setError('رابط النظام الخارجي مطلوب للأنظمة المستقلة')
+      return
+    }
 
     const payload: Record<string, any> = {
       name: form.name.trim(),
@@ -127,8 +143,12 @@ export default function BrandsPage() {
       fc_target_low: fcLow,
       fc_target_high: fcHigh,
       primary_color: form.primary_color,
+      sidebar_color: form.sidebar_color,
+      secondary_color: form.secondary_color,
       delivery_commission_pct: commission,
       logo_url: form.logo_url.trim() || null,
+      is_standalone: form.is_standalone,
+      external_url: form.is_standalone ? form.external_url.trim() || null : null,
     }
 
     setSaving(true)
@@ -224,6 +244,7 @@ export default function BrandsPage() {
               <tr className="border-b border-gray-200 text-xs text-gray-500 bg-gray-50">
                 <th className="text-right px-4 py-3 font-medium">البراند</th>
                 <th className="text-center px-4 py-3 font-medium">الرمز</th>
+                <th className="text-center px-4 py-3 font-medium">النوع</th>
                 <th className="text-center px-4 py-3 font-medium">اللون</th>
                 <th className="text-center px-4 py-3 font-medium">هدف FC%</th>
                 <th className="text-center px-4 py-3 font-medium">عمولة التوصيل</th>
@@ -247,11 +268,31 @@ export default function BrandsPage() {
                       <div>
                         <div className="font-medium text-gray-900">{b.name_ar}</div>
                         <div className="text-xs text-gray-500 mt-0.5">{b.name}</div>
+                        {b.is_standalone && b.external_url && (
+                          <a
+                            href={b.external_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-xs text-green-600 hover:underline mt-0.5 block font-mono"
+                            onClick={e => e.stopPropagation()}
+                          >
+                            {b.external_url}
+                          </a>
+                        )}
                       </div>
                     </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     <span className="text-xs font-mono bg-gray-100 px-2 py-1 rounded">{b.id}</span>
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {b.is_standalone ? (
+                      <span className="text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">
+                        ↗ مستقل
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">متكامل</span>
+                    )}
                   </td>
                   <td className="px-4 py-3 text-center">
                     <div className="flex items-center justify-center gap-1.5">
@@ -287,7 +328,7 @@ export default function BrandsPage() {
                           تعديل
                         </button>
                       )}
-                      {canUpdate && (
+                      {canUpdate && !b.is_standalone && (
                         <button
                           onClick={() => handleOpenCloseDlg(b)}
                           className="text-xs px-3 py-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-lg transition-colors"
@@ -310,7 +351,7 @@ export default function BrandsPage() {
               ))}
               {brands.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
+                  <td colSpan={9} className="px-4 py-12 text-center text-gray-400">لا توجد براندات</td>
                 </tr>
               )}
             </tbody>
@@ -362,30 +403,71 @@ export default function BrandsPage() {
                 </div>
               </div>
 
-              {/* Logo & Color */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">اللون الأساسي</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="color"
-                      value={form.primary_color}
-                      onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
-                      className="w-10 h-9 rounded border border-gray-300 cursor-pointer p-0.5"
-                    />
-                    <input
-                      value={form.primary_color}
-                      onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
-                      placeholder="#3b82f6"
-                      className={`${inputCls} font-mono flex-1`}
-                      dir="ltr"
-                    />
+              {/* Colors */}
+              <div className="space-y-3">
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">اللون الرئيسي</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.primary_color}
+                        onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
+                        className="w-10 h-9 rounded border border-gray-300 cursor-pointer p-0.5"
+                      />
+                      <input
+                        value={form.primary_color}
+                        onChange={e => setForm(f => ({ ...f, primary_color: e.target.value }))}
+                        placeholder="#3b82f6"
+                        className={`${inputCls} font-mono flex-1`}
+                        dir="ltr"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">لون السايدبار</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.sidebar_color}
+                        onChange={e => setForm(f => ({ ...f, sidebar_color: e.target.value }))}
+                        className="w-10 h-9 rounded border border-gray-300 cursor-pointer p-0.5"
+                      />
+                      <input
+                        value={form.sidebar_color}
+                        onChange={e => setForm(f => ({ ...f, sidebar_color: e.target.value }))}
+                        placeholder="#1c1c2e"
+                        className={`${inputCls} font-mono flex-1`}
+                        dir="ltr"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">اللون الثانوي</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={form.secondary_color}
+                        onChange={e => setForm(f => ({ ...f, secondary_color: e.target.value }))}
+                        className="w-10 h-9 rounded border border-gray-300 cursor-pointer p-0.5"
+                      />
+                      <input
+                        value={form.secondary_color}
+                        onChange={e => setForm(f => ({ ...f, secondary_color: e.target.value }))}
+                        placeholder="#8b5cf6"
+                        className={`${inputCls} font-mono flex-1`}
+                        dir="ltr"
+                      />
+                    </div>
                   </div>
                 </div>
-                <div>
-                  <label className="block text-xs font-medium text-gray-700 mb-1">معاينة</label>
-                  <div className="h-9 rounded-lg flex items-center justify-center text-white text-sm font-bold" style={{ backgroundColor: form.primary_color }}>
-                    {form.name_ar || form.id || 'براند'}
+                {/* Live preview */}
+                <div className="rounded-xl overflow-hidden border border-gray-200 flex h-14">
+                  <div className="w-10 flex-shrink-0" style={{ backgroundColor: form.sidebar_color }} />
+                  <div className="flex-1 flex items-center px-4 gap-3" style={{ backgroundColor: form.sidebar_color }}>
+                    <span className="w-1 h-7 rounded-full flex-shrink-0" style={{ backgroundColor: form.primary_color }} />
+                    <span className="text-sm font-bold" style={{ color: '#ffffff' }}>{form.name_ar || form.id || 'براند'}</span>
+                    <span className="mr-auto text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: `${form.secondary_color}30`, color: form.secondary_color }}>نشط</span>
                   </div>
                 </div>
               </div>
@@ -403,6 +485,35 @@ export default function BrandsPage() {
                   <div className="mt-2 flex items-center gap-2">
                     <img src={form.logo_url} alt="معاينة" className="w-10 h-10 object-contain rounded-lg border border-gray-200 bg-gray-50" onError={e => (e.currentTarget.style.display = 'none')} />
                     <span className="text-xs text-gray-400">معاينة الشعار</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Standalone toggle */}
+              <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.is_standalone}
+                    onChange={e => setForm(f => ({ ...f, is_standalone: e.target.checked, external_url: e.target.checked ? f.external_url : '' }))}
+                    className="w-4 h-4 rounded text-green-600 focus:ring-green-500"
+                  />
+                  <div>
+                    <span className="text-sm font-medium text-gray-800">نظام مستقل ↗</span>
+                    <p className="text-xs text-gray-400 mt-0.5">يُفتح في تبويب خارجي بدلاً من الدخول للنظام</p>
+                  </div>
+                </label>
+
+                {form.is_standalone && (
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">رابط النظام الخارجي</label>
+                    <input
+                      value={form.external_url}
+                      onChange={e => setForm(f => ({ ...f, external_url: e.target.value }))}
+                      placeholder="https://..."
+                      className={`${inputCls} font-mono`}
+                      dir="ltr"
+                    />
                   </div>
                 )}
               </div>

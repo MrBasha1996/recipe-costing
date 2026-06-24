@@ -1,6 +1,5 @@
 export function getCurrentYearMonth(): string {
-  const d = new Date()
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  return new Date().toISOString().slice(0, 7)
 }
 
 export function formatYearMonth(ym: string): string {
@@ -28,6 +27,16 @@ export function shiftMonth(ym: string, delta: number): string {
   const [y, m] = ym.split('-').map(Number)
   const d = new Date(y, m - 1 + delta, 1)
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/**
+ * يفحص إذا كانت فترة دفعة مغلقة.
+ * batchDate: '2024-01-15' أو '2024-01' — يُقرأ أول 7 أحرف فقط.
+ * closedUpTo: 'YYYY-MM' أو null (لا إغلاق)
+ */
+export function isPeriodClosed(batchDate: string, closedUpTo: string | null | undefined): boolean {
+  if (!closedUpTo) return false
+  return batchDate.slice(0, 7) <= closedUpTo
 }
 
 /** Returns last N year-month strings, newest first */

@@ -9,6 +9,7 @@ import { downloadPurchasesTemplate, parsePurchasesFile, validatePurchaseRows } f
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { PurchaseRow, BrandId } from '@/types'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 
 type ViewTab = 'import' | 'analytics'
 
@@ -29,6 +30,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
   const router = useRouter()
   const { profile } = useUserStore()
   const { isSuperAdmin, hasPermission } = usePermissionsStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const canImport = isSuperAdmin || hasPermission('purchasing', 'import')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -77,6 +79,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
   async function handleImport() {
     if (preview.length === 0) return
     setImporting(true); setImportMsg(null)
+    startLoading(updatePrices ? 'جارٍ استيراد المشتريات وتحديث الأسعار...' : 'جارٍ استيراد المشتريات...')
     try {
       const supabase = createClient()
       const batchId = crypto.randomUUID()
@@ -106,7 +109,7 @@ export default function PurchasingClient({ initialBatches, conversionRows, brand
       router.refresh()
     } catch (err: any) {
       setImportMsg({ ok: false, text: `خطأ: ${err.message}` })
-    } finally { setImporting(false) }
+    } finally { setImporting(false); stopLoading() }
   }
 
   function handleDeleteBatch(batchId: string) {

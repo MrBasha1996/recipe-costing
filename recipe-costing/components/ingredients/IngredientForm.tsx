@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { usePeriod } from '@/hooks/usePeriod'
 import { formatYearMonth } from '@/lib/period'
@@ -75,12 +75,27 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
   const [cost, setCost] = useState(ingredient?.cost?.toString() ?? '0')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [fieldErrors, setFieldErrors] = useState<{ name?: string; sku?: string; category?: string }>({})
+
+  function validateField(field: 'name' | 'sku' | 'category', value: string) {
+    if (!value.trim()) {
+      setFieldErrors(prev => ({ ...prev, [field]: 'هذا الحقل مطلوب' }))
+    } else {
+      setFieldErrors(prev => { const next = { ...prev }; delete next[field]; return next })
+    }
+  }
   const [monthlyHistory, setMonthlyHistory] = useState<MonthlyAvg[]>([])
   const [historyReady, setHistoryReady] = useState(false)
   const [buyUnit, setBuyUnit] = useState('')
   const [convFactor, setConvFactor] = useState('')
 
   const { isCurrentClosed, currentYM } = usePeriod()
+  const modalRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const firstFocusable = modalRef.current?.querySelector<HTMLElement>('button, input, select')
+    firstFocusable?.focus()
+  }, [])
 
   useEffect(() => {
     if (!isEdit || !ingredient) return
@@ -181,7 +196,7 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl border border-gray-200 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
+      <div ref={modalRef} className="bg-white rounded-2xl border border-gray-200 w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 sticky top-0 bg-white">
           <h2 className="text-gray-900 font-semibold">{isEdit ? 'تعديل المادة الخام' : 'إضافة مادة خام'}</h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-xl leading-none">×</button>
@@ -189,31 +204,46 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
 
         <div className="p-6 space-y-4">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">الاسم</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="اسم المادة الخام"
-              className={inputCls} />
+            <label htmlFor="ing-name" className="block text-xs text-gray-500 mb-1">
+              الاسم <span className="text-red-500">*</span>
+            </label>
+            <input id="ing-name" value={name} onChange={e => setName(e.target.value)}
+              onBlur={e => validateField('name', e.target.value)}
+              placeholder="اسم المادة الخام"
+              className={`${inputCls} ${fieldErrors.name ? 'border-red-400' : ''}`} />
+            {fieldErrors.name && <p className="text-xs text-red-500 mt-0.5">{fieldErrors.name}</p>}
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">SKU</label>
-            <input value={sku} onChange={e => setSku(e.target.value)} placeholder="sk-0001" dir="ltr"
+            <label htmlFor="ing-sku" className="block text-xs text-gray-500 mb-1">
+              SKU <span className="text-red-500">*</span>
+            </label>
+            <input id="ing-sku" value={sku} onChange={e => setSku(e.target.value)}
+              onBlur={e => !isEdit && validateField('sku', e.target.value)}
+              placeholder="sk-0001" dir="ltr"
               disabled={isEdit}
-              className={`${inputCls} font-mono disabled:opacity-50 disabled:bg-gray-50`} />
+              className={`${inputCls} font-mono disabled:opacity-50 disabled:bg-gray-50 ${fieldErrors.sku ? 'border-red-400' : ''}`} />
+            {fieldErrors.sku && <p className="text-xs text-red-500 mt-0.5">{fieldErrors.sku}</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs text-gray-500 mb-1">الفئة</label>
-              <input value={category} onChange={e => setCategory(e.target.value)} placeholder="بهارات"
-                className={inputCls} />
+              <label htmlFor="ing-category" className="block text-xs text-gray-500 mb-1">
+                الفئة <span className="text-red-500">*</span>
+              </label>
+              <input id="ing-category" value={category} onChange={e => setCategory(e.target.value)}
+                onBlur={e => validateField('category', e.target.value)}
+                placeholder="بهارات"
+                className={`${inputCls} ${fieldErrors.category ? 'border-red-400' : ''}`} />
+              {fieldErrors.category && <p className="text-xs text-red-500 mt-0.5">{fieldErrors.category}</p>}
             </div>
             <div>
-              <label className="block text-xs text-gray-500 mb-1">الوحدة</label>
-              <input value={unit} onChange={e => setUnit(e.target.value)} placeholder="جرام"
+              <label htmlFor="ing-unit" className="block text-xs text-gray-500 mb-1">الوحدة</label>
+              <input id="ing-unit" value={unit} onChange={e => setUnit(e.target.value)} placeholder="جرام"
                 className={inputCls} />
             </div>
           </div>
           <div>
-            <label className="block text-xs text-gray-500 mb-1">التكلفة / وحدة (ريال)</label>
-            <input type="number" value={cost} onChange={e => setCost(e.target.value)}
+            <label htmlFor="ing-cost" className="block text-xs text-gray-500 mb-1">التكلفة / وحدة (ريال)</label>
+            <input id="ing-cost" type="number" value={cost} onChange={e => setCost(e.target.value)}
               min="0" step="0.000001" dir="ltr"
               disabled={isEdit && isCurrentClosed}
               className={`${inputCls} font-mono disabled:opacity-50 disabled:bg-gray-50`} />
@@ -293,8 +323,9 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
             <p className="text-xs font-medium text-gray-600 mb-3">تحويل وحدة الشراء <span className="text-gray-400 font-normal">(اختياري)</span></p>
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs text-gray-500 mb-1">وحدة الشراء</label>
+                <label htmlFor="ing-buyunit" className="block text-xs text-gray-500 mb-1">وحدة الشراء</label>
                 <input
+                  id="ing-buyunit"
                   value={buyUnit}
                   onChange={e => setBuyUnit(e.target.value)}
                   placeholder="علبة / كيلو / كرتون"
@@ -302,10 +333,11 @@ export default function IngredientForm({ brand, ingredient, onClose, onSaved }: 
                 />
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label htmlFor="ing-convfactor" className="block text-xs text-gray-500 mb-1">
                   معامل التحويل
                 </label>
                 <input
+                  id="ing-convfactor"
                   type="number"
                   value={convFactor}
                   onChange={e => setConvFactor(e.target.value)}

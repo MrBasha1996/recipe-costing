@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
     .select('id, product_sku, product_name, qty_sold, sale_date')
     .eq('brand_id', brand_id)
     .eq('import_batch', import_batch)
+    .is('exploded_at', null)
 
   if (salesErr) return NextResponse.json({ error: salesErr.message }, { status: 500 })
   if (!sales?.length) return NextResponse.json({ exploded: 0, skipped: 0 })
@@ -223,7 +224,7 @@ export async function POST(request: NextRequest) {
           if (comboHasIngs) {
             comboMap.set(combo.sku, { total_cost: combo.total_cost ?? 0 })
             exploded++
-            skipped--
+            skipped = Math.max(0, skipped - 1)
           }
         }
       }
@@ -231,19 +232,15 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 4c. Modifier ingredient deductions ────────────────────────────
-  // Fetch modifier_sales overlapping this batch's date range and deduct their ingredient quantities
-  const saleDates = (sales as any[]).map((r: any) => r.sale_date as string)
-  const minDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a < b ? a : b) : null
-  const maxDate   = saleDates.length ? saleDates.reduce((a: string, b: string) => a > b ? a : b) : null
+  // Fetch modifier_sales for exactly this import_batch — prevents deducting a modifier batch
+  // when exploding a different daily_sales batch in the same period
+  const { data: modSales } = await (admin.from('modifier_sales') as any)
+    .select('id, option_sku, qty_sold')
+    .eq('brand_id', brand_id)
+    .eq('import_batch', import_batch)
+    .is('exploded_at', null)
 
-  if (minDate && maxDate) {
-    const { data: modSales } = await (admin.from('modifier_sales') as any)
-      .select('id, option_sku, qty_sold')
-      .eq('brand_id', brand_id)
-      .is('exploded_at', null)
-      .lte('date_from', maxDate)
-      .gte('date_to', minDate)
-
+  {
     const modSalesList = (modSales || []) as any[]
     if (modSalesList.length > 0) {
       for (const r of modSalesList) modifierSalesIds.push(r.id)
@@ -362,15 +359,20 @@ export async function POST(request: NextRequest) {
   // ── 7. Build write payloads ───────────────────────────────────────
   const stockUpserts: any[] = []
   const movementRows: any[] = []
+  const deficits: { sku: string; name: string; needed: number; inStock: number }[] = []
   const note = `خصم تلقائي — دفعة ${import_batch.slice(0, 8)}`
 
   for (const [sku, { name, qty }] of deductMap) {
     const stock = stockMap.get(sku)
+    const inStock = stock?.current_qty ?? 0
+    if (qty > inStock) {
+      deficits.push({ sku, name, needed: Math.round(qty * 1000) / 1000, inStock })
+    }
     stockUpserts.push({
       ing_sku:     sku,
       ing_name:    name,
       unit:        stock?.unit ?? '—',
-      current_qty: Math.max(0, (stock?.current_qty ?? 0) - qty),
+      current_qty: Math.max(0, inStock - qty),
       min_qty:     stock?.min_qty ?? 0,
     })
     movementRows.push({
@@ -398,21 +400,15 @@ export async function POST(request: NextRequest) {
 
   // ── 9. Atomic write via RPC ───────────────────────────────────────
   const { error: rpcErr } = await (admin as any).rpc('apply_explode_writes', {
-    p_brand_id:      brand_id,
-    p_import_batch:  import_batch,
-    p_stock_upserts: stockUpserts,
-    p_movements:     movementRows,
-    p_sale_costs:    saleCosts,
+    p_brand_id:           brand_id,
+    p_import_batch:       import_batch,
+    p_stock_upserts:      stockUpserts,
+    p_movements:          movementRows,
+    p_sale_costs:         saleCosts,
+    p_modifier_sales_ids: modifierSalesIds.length > 0 ? modifierSalesIds : null,
   })
 
   if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 })
-
-  // Mark modifier_sales records as exploded
-  if (modifierSalesIds.length > 0) {
-    await (admin.from('modifier_sales') as any)
-      .update({ exploded_at: new Date().toISOString() })
-      .in('id', modifierSalesIds)
-  }
 
   await (admin.from('audit_logs') as any).insert({
     brand_id,
@@ -429,5 +425,6 @@ export async function POST(request: NextRequest) {
     skipped,
     deducted: deductMap.size,
     produced_batches,
+    ...(deficits.length > 0 ? { deficits } : {}),
   })
 }

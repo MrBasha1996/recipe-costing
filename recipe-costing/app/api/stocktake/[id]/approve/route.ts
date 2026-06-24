@@ -7,19 +7,32 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
+
+  let brand_id: string | undefined
+  try {
+    const body = await req.json()
+    brand_id = typeof body?.brand_id === 'string' ? body.brand_id : undefined
+  } catch { /* ignore */ }
+
+  if (!brand_id) return NextResponse.json({ error: 'brand_id مطلوب' }, { status: 400 })
+
+  // Permission check BEFORE any DB reads — prevents session existence leakage
+  const user = await requireModulePermission(brand_id, 'inventory', 'approve')
+  if (isAuthError(user)) return user
+
   const admin = createAdminClient()
 
-  // Fetch session first (admin client) to get brand_id for permission check
   const { data: session, error: fetchErr } = await (admin.from('stocktake_sessions') as any)
-    .select('id, status, brand_id, created_at')
+    .select('id, status, brand_id, session_date')
     .eq('id', id)
     .single()
 
   if (fetchErr || !session) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  // Enforce brand access + inventory:approve permission
-  const user = await requireModulePermission(session.brand_id, 'inventory', 'approve')
-  if (isAuthError(user)) return user
+  // Verify the session belongs to the brand the user was authorized for
+  if (session.brand_id !== brand_id) {
+    return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  }
 
   if (session.status !== 'finalized') {
     return NextResponse.json({ error: 'يجب إنهاء الجرد قبل الاعتماد' }, { status: 400 })
@@ -29,7 +42,7 @@ export async function POST(
   const { data: brandRow } = await (admin.from('brands') as any)
     .select('closed_up_to').eq('id', session.brand_id).maybeSingle()
   if (brandRow?.closed_up_to) {
-    const sessionYM = (session.created_at as string).slice(0, 7)
+    const sessionYM = (session.session_date as string).slice(0, 7)
     if (sessionYM <= brandRow.closed_up_to) {
       return NextResponse.json(
         { error: `الفترة ${sessionYM} مُغلقة — لا يمكن اعتماد جرد في فترة مُغلقة` },

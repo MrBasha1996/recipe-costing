@@ -59,8 +59,9 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
         <div className="p-6 space-y-4">
           {/* Name */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">الاسم</label>
+            <label htmlFor="prod-name" className="block text-xs text-gray-500 mb-1">الاسم</label>
             <input
+              id="prod-name"
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="اسم المنتج"
@@ -70,8 +71,9 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
 
           {/* SKU */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">SKU</label>
+            <label htmlFor="prod-sku" className="block text-xs text-gray-500 mb-1">SKU</label>
             <input
+              id="prod-sku"
               value={sku}
               onChange={e => setSku(e.target.value)}
               placeholder="sk-0001"
@@ -83,8 +85,9 @@ export default function ProductForm({ brand, product, onClose, onSaved }: Props)
 
           {/* Price */}
           <div>
-            <label className="block text-xs text-gray-500 mb-1">السعر (ريال)</label>
+            <label htmlFor="prod-price" className="block text-xs text-gray-500 mb-1">السعر (ريال)</label>
             <input
+              id="prod-price"
               type="number"
               value={price}
               onChange={e => setPrice(e.target.value)}

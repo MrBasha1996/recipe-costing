@@ -13,9 +13,10 @@ interface Props {
   initialCommission: number
   initialFcLow: number
   initialFcHigh: number
+  initialTrn: string
 }
 
-export default function SettingsClient({ initialCommission, initialFcLow, initialFcHigh }: Props) {
+export default function SettingsClient({ initialCommission, initialFcLow, initialFcHigh, initialTrn }: Props) {
   const { hasPermission, isSuperAdmin } = usePermissionsStore()
   const { brand } = useParams() as { brand: BrandId }
   const [showPeriodManager, setShowPeriodManager] = useState(false)
@@ -29,6 +30,20 @@ export default function SettingsClient({ initialCommission, initialFcLow, initia
   const [fcHigh, setFcHigh] = useState<string>(String(initialFcHigh))
   const [savingFc, setSavingFc] = useState(false)
   const [fcMsg, setFcMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const [trn, setTrn]       = useState<string>(initialTrn)
+  const [savingTrn, setSavingTrn] = useState(false)
+  const [trnMsg, setTrnMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function saveTrn() {
+    setSavingTrn(true); setTrnMsg(null)
+    const supabase = createClient()
+    const { error } = await (supabase.from('brands') as any)
+      .update({ tax_reg_number: trn.trim() || null })
+      .eq('id', brand)
+    setSavingTrn(false)
+    setTrnMsg(error ? { ok: false, text: error.message } : { ok: true, text: 'تم الحفظ ✓' })
+  }
 
   async function saveFcTargets() {
     const low = parseFloat(fcLow); const high = parseFloat(fcHigh)
@@ -190,6 +205,41 @@ export default function SettingsClient({ initialCommission, initialFcLow, initia
           <p className="text-xs text-gray-400">
             أقل من {fcLow}% = ممتاز · {fcLow}–{fcHigh}% = مقبول · أعلى من {fcHigh}% = مرتفع
           </p>
+        </div>
+      </div>
+
+      {/* TRN — الرقم الضريبي */}
+      <div className="bg-white border border-gray-200 rounded-2xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">🧾</span>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900">الرقم الضريبي (TRN)</h2>
+              <p className="text-xs text-gray-500 mt-0.5">رقم تسجيل ضريبة القيمة المضافة — ZATCA</p>
+            </div>
+          </div>
+        </div>
+        <div className="px-6 py-4 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <label htmlFor="trn-input" className="text-sm text-gray-700 w-48 shrink-0">رقم التسجيل الضريبي</label>
+            <input
+              id="trn-input"
+              type="text"
+              maxLength={15}
+              placeholder="300XXXXXXXXXX003"
+              value={trn}
+              onChange={e => setTrn(e.target.value)}
+              className="w-52 border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-mono focus:outline-none focus:border-blue-500"
+            />
+            <button
+              onClick={saveTrn}
+              disabled={savingTrn || (!isSuperAdmin && !hasPermission('settings', 'update'))}
+              className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg disabled:opacity-40 font-medium">
+              {savingTrn ? 'جارٍ الحفظ...' : 'حفظ'}
+            </button>
+          </div>
+          {trnMsg && <p className={`text-xs ${trnMsg.ok ? 'text-green-600' : 'text-red-600'}`}>{trnMsg.text}</p>}
+          <p className="text-xs text-gray-400">15 رقماً — يبدأ بـ 3 وينتهي بـ 3 — يُستخدم في الفواتير الإلكترونية</p>
         </div>
       </div>
 

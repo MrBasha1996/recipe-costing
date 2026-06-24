@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange } from '@/lib/period'
 import type { LaborCost, LaborDept, OverheadCost, OverheadCategory, MonthlyBudget, BrandId } from '@/types'
 
@@ -83,6 +84,7 @@ function BudgetRow({
 // ── Main Page ────────────────────────────────────────────────────
 export default function CostsClient({ initialLabor, initialOverhead, brand }: Props) {
   const { profile } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const months = lastNMonths(12)
   const [tab, setTab] = useState<Tab>('labor')
   const [month, setMonth] = useState(getCurrentYearMonth())
@@ -240,27 +242,32 @@ export default function CostsClient({ initialLabor, initialOverhead, brand }: Pr
 
   async function copyFromPrev() {
     setCopying(true); setCopyMsg(null)
-    const supabase = createClient()
-    const prev = prevMonth(month)
-    const [{ data: prevLabor }, { data: prevOv }] = await Promise.all([
-      (supabase.from('labor_costs') as any).select('department, description, amount').eq('brand_id', brand).eq('month', prev),
-      (supabase.from('overhead_costs') as any).select('category, description, amount').eq('brand_id', brand).eq('month', prev),
-    ])
-    if (!prevLabor?.length && !prevOv?.length) {
-      setCopyMsg({ ok: false, text: 'لا توجد بنود في الشهر السابق للنسخ منه' })
-      setCopying(false); return
+    startLoading('جارٍ نسخ البنود من الشهر السابق...')
+    try {
+      const supabase = createClient()
+      const prev = prevMonth(month)
+      const [{ data: prevLabor }, { data: prevOv }] = await Promise.all([
+        (supabase.from('labor_costs') as any).select('department, description, amount').eq('brand_id', brand).eq('month', prev),
+        (supabase.from('overhead_costs') as any).select('category, description, amount').eq('brand_id', brand).eq('month', prev),
+      ])
+      if (!prevLabor?.length && !prevOv?.length) {
+        setCopyMsg({ ok: false, text: 'لا توجد بنود في الشهر السابق للنسخ منه' })
+        return
+      }
+      await Promise.all([
+        prevLabor?.length ? (supabase.from('labor_costs') as any).insert(
+          prevLabor.map((r: any) => ({ brand_id: brand, month, department: r.department ?? 'other', description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
+        ) : Promise.resolve(),
+        prevOv?.length ? (supabase.from('overhead_costs') as any).insert(
+          prevOv.map((r: any) => ({ brand_id: brand, month, category: r.category, description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
+        ) : Promise.resolve(),
+      ])
+      await Promise.all([loadLabor(), loadOverhead()])
+      setCopyMsg({ ok: true, text: `تم نسخ ${(prevLabor?.length ?? 0) + (prevOv?.length ?? 0)} بند من ${formatYearMonth(prev)} ✓` })
+    } finally {
+      setCopying(false)
+      stopLoading()
     }
-    await Promise.all([
-      prevLabor?.length ? (supabase.from('labor_costs') as any).insert(
-        prevLabor.map((r: any) => ({ brand_id: brand, month, department: r.department ?? 'other', description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
-      ) : Promise.resolve(),
-      prevOv?.length ? (supabase.from('overhead_costs') as any).insert(
-        prevOv.map((r: any) => ({ brand_id: brand, month, category: r.category, description: r.description, amount: r.amount, created_by: profile?.id ?? null }))
-      ) : Promise.resolve(),
-    ])
-    await Promise.all([loadLabor(), loadOverhead()])
-    setCopyMsg({ ok: true, text: `تم نسخ ${(prevLabor?.length ?? 0) + (prevOv?.length ?? 0)} بند من ${formatYearMonth(prev)} ✓` })
-    setCopying(false)
   }
 
   const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'

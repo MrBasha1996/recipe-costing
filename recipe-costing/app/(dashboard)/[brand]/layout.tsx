@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getValidBrands } from '@/lib/server-brand'
 import DashboardShell from './DashboardShell'
-import type { BrandId, PermissionsMap } from '@/types'
+import type { BrandId, PermissionsMap, Brand } from '@/types'
 
 export default async function DashboardLayout({
   children,
@@ -35,6 +35,13 @@ export default async function DashboardLayout({
 
   const isSuperAdmin = (profile.roles as any)?.is_super_admin === true
   const roleName: string | null = (profile.roles as any)?.name ?? null
+
+  const { data: brandData } = await (supabase as any)
+    .from('brands')
+    .select('name, name_ar, primary_color, sidebar_color, secondary_color, logo_url')
+    .eq('id', brand)
+    .single()
+
   const initialPermissions: PermissionsMap = {}
 
   if (!isSuperAdmin && profile.role_id) {
@@ -65,6 +72,7 @@ export default async function DashboardLayout({
     <DashboardShell
       profile={profile}
       brand={brand}
+      brandMeta={brandData ?? null}
       initialPermissions={initialPermissions}
       isSuperAdmin={isSuperAdmin}
       roleName={roleName}

@@ -7,33 +7,79 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
 import BrandSelectorOverlay from '@/components/BrandSelectorOverlay'
+import { GlobalLoadingProvider } from '@/contexts/globalLoading'
 import type { UserProfile, BrandId, PermissionsMap } from '@/types'
 
-const NAV_BASE = [
-  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   path: '/dashboard' },
-  { key: 'costing',     icon: '📋', label: 'الوصفات',       path: '/costing' },
-  { key: 'batches',     icon: '⚙', label: 'الباتشات',      path: '/batches' },
-  { key: 'products',    icon: '🛍', label: 'المنتجات',        path: '/products' },
-  { key: 'combos',      icon: '🍱', label: 'وجبات الكومبو',  path: '/combos' },
-  { key: 'modifiers',   icon: '➕', label: 'الإضافات',       path: '/modifiers' },
-  { key: 'ingredients', icon: '🥗', label: 'المواد الخام',   path: '/ingredients' },
-  { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     path: '/purchasing' },
-  { key: 'sales',       icon: '💰', label: 'المبيعات',      path: '/sales' },
-  { key: 'waste',       icon: '🗑', label: 'الهدر والفاقد', path: '/waste' },
-  { key: 'costs',       icon: '🏗', label: 'التكاليف',      path: '/costs' },
-  { key: 'reports',     icon: '📊', label: 'التقارير',      path: '/reports' },
-  { key: 'comparison',  icon: '↔️', label: 'مقارنة',        path: '/comparison' },
-  { key: 'inventory',   icon: '📦', label: 'المخزون',       path: '/inventory' },
-  { key: 'production',  icon: '⚙️', label: 'الإنتاج',       path: '/production' },
-  { key: 'suppliers',   icon: '🏭', label: 'الموردون',      path: '/suppliers' },
-  { key: 'users',       icon: '👥', label: 'المستخدمون',    path: '/users' },
-  { key: 'roles',       icon: '🔐', label: 'المجموعات',     path: '/roles' },
-  { key: 'brands',      icon: '🏢', label: 'البراندات',     path: '/brands' },
-  { key: 'branches',    icon: '🏪', label: 'الفروع',        path: '/branches' },
-  { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     path: '/settings' },
+type NavGroup = 'ops' | 'analytics' | 'admin'
+
+const NAV_BASE: { key: string; icon: string; label: string; path: string; group: NavGroup }[] = [
+  { key: 'dashboard',   icon: '📈', label: 'لوحة التحكم',   path: '/dashboard',  group: 'ops' },
+  { key: 'costing',     icon: '📋', label: 'الوصفات',       path: '/costing',    group: 'ops' },
+  { key: 'batches',     icon: '⚙', label: 'الباتشات',      path: '/batches',    group: 'ops' },
+  { key: 'products',    icon: '🛍', label: 'المنتجات',       path: '/products',   group: 'ops' },
+  { key: 'combos',      icon: '🍱', label: 'وجبات الكومبو',  path: '/combos',     group: 'ops' },
+  { key: 'modifiers',   icon: '➕', label: 'الإضافات',       path: '/modifiers',  group: 'ops' },
+  { key: 'ingredients', icon: '🥗', label: 'المواد الخام',   path: '/ingredients',group: 'ops' },
+  { key: 'purchasing',  icon: '🛒', label: 'المشتريات',     path: '/purchasing', group: 'ops' },
+  { key: 'sales',       icon: '💰', label: 'المبيعات',      path: '/sales',      group: 'ops' },
+  { key: 'waste',       icon: '🗑', label: 'الهدر والفاقد', path: '/waste',      group: 'ops' },
+  { key: 'costs',       icon: '🏗', label: 'التكاليف',      path: '/costs',      group: 'ops' },
+  { key: 'inventory',   icon: '📦', label: 'المخزون',       path: '/inventory',  group: 'ops' },
+  { key: 'production',  icon: '⚙️', label: 'الإنتاج',       path: '/production', group: 'ops' },
+  { key: 'reports',     icon: '📊', label: 'التقارير',      path: '/reports',    group: 'analytics' },
+  { key: 'comparison',  icon: '↔️', label: 'مقارنة',        path: '/comparison', group: 'analytics' },
+  { key: 'suppliers',   icon: '🏭', label: 'الموردون',      path: '/suppliers',  group: 'analytics' },
+  { key: 'users',       icon: '👥', label: 'المستخدمون',    path: '/users',      group: 'admin' },
+  { key: 'roles',       icon: '🔐', label: 'المجموعات',     path: '/roles',      group: 'admin' },
+  { key: 'brands',      icon: '🏢', label: 'البراندات',     path: '/brands',     group: 'admin' },
+  { key: 'branches',    icon: '🏪', label: 'الفروع',        path: '/branches',   group: 'admin' },
+  { key: 'settings',    icon: '⚙️', label: 'الإعدادات',     path: '/settings',   group: 'admin' },
 ]
 
+const GROUP_LABELS: Record<NavGroup, string> = {
+  ops:       'التشغيل',
+  analytics: 'التحليل',
+  admin:     'الإدارة',
+}
+
 const SIDEBAR_W = 260
+
+// ── Brand color helpers ───────────────────────────────────────────
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
+  return m ? [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)] : null
+}
+
+function buildBrandStyle(
+  primary: string | null | undefined,
+  sidebar: string | null | undefined,
+  secondary: string | null | undefined,
+): React.CSSProperties {
+  const p = hexToRgb(primary ?? '')
+  if (!p) return {}
+  const [pr, pg, pb] = p
+  const s = hexToRgb(sidebar ?? '')
+  const [sr, sg, sb] = s ?? [Math.round(pr * .08), Math.round(pg * .08), Math.round(pb * .08)]
+  const c = hexToRgb(secondary ?? '')
+  const [cr, cg, cb] = c ?? [pr, pg, pb]
+  return {
+    '--brand-sidebar-bg':      `rgb(${sr},${sg},${sb})`,
+    '--brand-sidebar-border':  `rgba(${sr},${sg},${sb},0.6)`,
+    '--brand-logo-from':       `rgba(${sr},${sg},${sb},0.7)`,
+    '--brand-logo-to':         primary!,
+    '--brand-nav-hover-bg':    `rgba(${cr},${cg},${cb},0.12)`,
+    '--brand-nav-hover-text':  `rgba(${cr},${cg},${cb},0.85)`,
+    '--brand-nav-active-bg':   `rgba(${pr},${pg},${pb},0.22)`,
+    '--brand-nav-active-text': '#ffffff',
+    '--brand-nav-active-bar':  primary!,
+    '--brand-nav-text':        `rgba(${cr},${cg},${cb},0.6)`,
+    '--brand-accent':          primary!,
+    '--brand-badge-bg':        `rgba(${cr},${cg},${cb},0.15)`,
+    '--brand-badge-text':      `rgba(${cr},${cg},${cb},0.9)`,
+    '--brand-switcher-active': primary!,
+    '--brand-header-accent':   `rgb(${Math.round(sr * .7)},${Math.round(sg * .7)},${Math.round(sb * .7)})`,
+  } as React.CSSProperties
+}
 
 // ── Alerts ────────────────────────────────────────────────────────
 type AlertType = 'empty' | 'low' | 'expired' | 'expiring'
@@ -46,6 +92,7 @@ const ALERT_COLOR: Record<AlertType, string> = { empty: 'text-red-600', low: 'te
 export default function DashboardShell({
   profile,
   brand,
+  brandMeta,
   initialPermissions,
   isSuperAdmin,
   roleName: roleNameProp,
@@ -53,6 +100,7 @@ export default function DashboardShell({
 }: {
   profile: UserProfile
   brand: BrandId
+  brandMeta: { name: string; name_ar: string; primary_color?: string | null; sidebar_color?: string | null; secondary_color?: string | null; logo_url?: string | null } | null
   initialPermissions: PermissionsMap
   isSuperAdmin: boolean
   roleName: string | null
@@ -155,25 +203,26 @@ export default function DashboardShell({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mounted, permLoaded, pathname, profile.role_id])
 
-  const brandConfig = brand === 'ti'
-    ? {
-        name:       'Three In',
-        nameAr:     'ثري إن',
-        icon:       '🍔',
-        tagline:    'Burger & Steak',
-        headerBg:   '#0e1f2e',
-        accentBar:  'linear-gradient(to left, #1e40af, #3b82f6, #60a5fa)',
-      }
-    : {
-        name:       'باب البلد',
-        nameAr:     'Bab Al Balad',
-        icon:       '🫕',
-        tagline:    'المطبخ العربي الأصيل',
-        headerBg:   '#1c0f00',
-        accentBar:  'linear-gradient(to left, #92400e, #d97706, #fbbf24)',
-      }
+  const brandCss = (() => {
+    const s = buildBrandStyle(
+      brandMeta?.primary_color,
+      brandMeta?.sidebar_color,
+      brandMeta?.secondary_color,
+    )
+    if (!Object.keys(s).length) return ''
+    return `[data-brand="${brand}"]{${Object.entries(s).map(([k, v]) => `${k}:${v}`).join(';')}}`
+  })()
+
+  const brandConfig = {
+    name:      brandMeta?.name_ar ?? brand,
+    tagline:   brandMeta?.name ?? '',
+    logoUrl:   brandMeta?.logo_url ?? null,
+    accentBar: 'linear-gradient(to left, var(--brand-header-accent), var(--brand-nav-active-bar), var(--brand-badge-text))',
+  }
 
   return (
+    <GlobalLoadingProvider>
+    {brandCss && <style>{brandCss}</style>}
     <div dir="rtl" data-brand={brand} suppressHydrationWarning style={{ background: 'var(--color-bg)', minHeight: '100vh' }}>
 
       {/* Brand Selector Overlay */}
@@ -211,10 +260,16 @@ export default function DashboardShell({
         >
           <div className="flex items-center gap-3">
             <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center text-xl flex-shrink-0"
+              className="w-10 h-10 rounded-xl flex-shrink-0 overflow-hidden"
               style={{ background: 'var(--brand-nav-active-bg)', border: '1px solid var(--brand-nav-active-bar)' }}
             >
-              {brandConfig.icon}
+              {brandConfig.logoUrl ? (
+                <img src={brandConfig.logoUrl} alt={brandConfig.name} className="w-full h-full object-contain" />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-white font-bold text-base">
+                  {brandConfig.name.charAt(0)}
+                </div>
+              )}
             </div>
             <div className="min-w-0">
               <div className="font-bold text-white text-sm leading-tight">{brandConfig.name}</div>
@@ -240,31 +295,44 @@ export default function DashboardShell({
               }}
             >
               <span className="text-xs font-semibold" style={{ color: 'var(--brand-badge-text)' }}>
-                {brandConfig.icon} {brandConfig.name}
+                {brandConfig.name}
               </span>
               <span className="text-xs" style={{ color: 'var(--brand-nav-text)' }}>تغيير ↗</span>
             </button>
           ) : (
             <span className="text-xs px-3 py-1.5 rounded-full flex items-center gap-1.5" style={{ background: 'var(--brand-badge-bg)', color: 'var(--brand-badge-text)' }}>
-              {brandConfig.icon} {brandConfig.name}
+              {brandConfig.name}
             </span>
           )}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-0.5">
-          {visibleNav.map(item => {
-            const active = pathname.startsWith(item.href)
+        <nav className="flex-1 px-3 py-3 overflow-y-auto">
+          {(['ops', 'analytics', 'admin'] as NavGroup[]).map(group => {
+            const groupItems = visibleNav.filter(n => n.group === group)
+            if (groupItems.length === 0) return null
             return (
-              <Link
-                key={item.key}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                className={`sidebar-nav-item ${active ? 'active' : ''}`}
-              >
-                <span className="text-base w-5 text-center flex-shrink-0 opacity-90">{item.icon}</span>
-                <span className="text-sm">{item.label}</span>
-              </Link>
+              <div key={group} className="mb-3">
+                <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest" style={{ color: 'var(--brand-nav-text)', opacity: 0.5 }}>
+                  {GROUP_LABELS[group]}
+                </div>
+                <div className="space-y-0.5">
+                  {groupItems.map(item => {
+                    const active = pathname.startsWith(item.href)
+                    return (
+                      <Link
+                        key={item.key}
+                        href={item.href}
+                        onClick={() => setMobileOpen(false)}
+                        className={`sidebar-nav-item ${active ? 'active' : ''}`}
+                      >
+                        <span className="text-base w-5 text-center flex-shrink-0 opacity-90">{item.icon}</span>
+                        <span className="text-sm">{item.label}</span>
+                      </Link>
+                    )
+                  })}
+                </div>
+              </div>
             )
           })}
         </nav>
@@ -289,13 +357,15 @@ export default function DashboardShell({
             </div>
             <button
               onClick={handleLogout}
-              title="خروج"
-              className="p-1.5 rounded transition-colors flex-shrink-0 text-sm"
+              aria-label="تسجيل الخروج"
+              title="تسجيل الخروج"
+              className="p-1.5 rounded transition-colors flex-shrink-0 text-sm flex items-center gap-1"
               style={{ color: 'var(--brand-nav-text)' }}
               onMouseEnter={e => (e.currentTarget.style.color = '#ef4444')}
               onMouseLeave={e => (e.currentTarget.style.color = 'var(--brand-nav-text)')}
             >
-              ⏻
+              <span aria-hidden="true">⏻</span>
+              <span className="text-xs">خروج</span>
             </button>
           </div>
         </div>
@@ -390,7 +460,7 @@ export default function DashboardShell({
               }}
               title={hasMultiBrand ? 'تغيير البراند' : undefined}
             >
-              {brandConfig.icon} {brandConfig.name}
+              {brandConfig.name}
               {hasMultiBrand && <span style={{ opacity: 0.6, fontSize: 10 }}>↗</span>}
             </button>
             <span className="text-xs text-gray-500 font-medium hidden sm:block">{profile.name_ar || profile.username}</span>
@@ -403,5 +473,6 @@ export default function DashboardShell({
         </main>
       </div>
     </div>
+    </GlobalLoadingProvider>
   )
 }

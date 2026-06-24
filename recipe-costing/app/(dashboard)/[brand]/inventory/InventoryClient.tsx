@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { MovementType, StockMovement, BrandId } from '@/types'
 
@@ -63,10 +64,12 @@ interface Props {
 export default function InventoryClient({ initialItems, initialMovements, brand }: Props) {
   const router = useRouter()
   const { isAccountant, canEdit } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const isAcct = isAccountant()
   const canE = canEdit('inventory')
 
   const [tab, setTab]           = useState<Tab>('stock')
+  const [showAnalyticsMenu, setShowAnalyticsMenu] = useState(false)
   const [items, setItems]       = useState<InventoryItem[]>(initialItems)
   const [movements, setMovements] = useState<StockMovement[]>(initialMovements)
 
@@ -133,18 +136,50 @@ export default function InventoryClient({ initialItems, initialMovements, brand 
         </div>
       )}
 
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit flex-wrap">
-        {([['stock', 'المخزون الحالي'], ['add', 'إضافة حركة'], ['history', 'سجل الحركات'], ['stocktake', 'الجرد الدوري'], ['availability', 'توافر الأطباق'], ['aging', 'عمر المخزون'], ['orders', 'طلبات الشراء'], ['valuation', 'قيمة المخزون'], ['ledger', 'بطاقة الصنف'], ['waste-analytics', 'تحليل الهالك']] as [Tab, string][]).map(([v, l]) => (
-          <button key={v} onClick={() => setTab(v)}
-            className={`relative px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+      {/* التبويبات اليومية (4) + dropdown للتحليلات (6) */}
+      <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5 w-fit flex-wrap items-center">
+        {([['stock', 'المخزون'], ['add', 'إضافة حركة'], ['stocktake', 'الجرد الدوري'], ['availability', 'توافر الأطباق']] as [Tab, string][]).map(([v, l]) => (
+          <button key={v} onClick={() => { setTab(v); setShowAnalyticsMenu(false) }}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === v ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             {l}
-            {v === 'orders' && belowPar.length > 0 && (
+          </button>
+        ))}
+
+        {/* Dropdown التحليلات */}
+        <div className="relative">
+          <button
+            onClick={() => setShowAnalyticsMenu(v => !v)}
+            className={`relative px-4 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center gap-1 ${(['history','aging','orders','valuation','ledger','waste-analytics'] as Tab[]).includes(tab) ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            {(['history','aging','orders','valuation','ledger','waste-analytics'] as Tab[]).includes(tab)
+              ? ({ history: 'سجل الحركات', aging: 'عمر المخزون', orders: 'طلبات الشراء', valuation: 'قيمة المخزون', ledger: 'بطاقة الصنف', 'waste-analytics': 'تحليل الهالك' } as Record<Tab, string>)[tab]
+              : 'تحليلات'}
+            <span className="text-[10px] opacity-60">▾</span>
+            {(['orders'] as Tab[]).includes(tab) === false && belowPar.length > 0 && tab !== 'orders' && (
               <span className="absolute -top-1 -left-1 bg-red-500 text-white text-[10px] font-bold w-4 h-4 rounded-full flex items-center justify-center leading-none">
                 {belowPar.length > 9 ? '9+' : belowPar.length}
               </span>
             )}
           </button>
-        ))}
+          {showAnalyticsMenu && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setShowAnalyticsMenu(false)} />
+              <div className="absolute top-full mt-1 right-0 z-20 bg-white border border-gray-200 rounded-xl shadow-lg py-1 min-w-[140px]">
+                {([['history', 'سجل الحركات'], ['aging', 'عمر المخزون'], ['orders', 'طلبات الشراء'], ['valuation', 'قيمة المخزون'], ['ledger', 'بطاقة الصنف'], ['waste-analytics', 'تحليل الهالك']] as [Tab, string][]).map(([v, l]) => (
+                  <button key={v} onClick={() => { setTab(v); setShowAnalyticsMenu(false) }}
+                    className={`w-full text-right px-4 py-2 text-sm transition-colors ${tab === v ? 'bg-blue-50 text-blue-700 font-medium' : 'text-gray-700 hover:bg-gray-50'} flex items-center justify-between gap-2`}>
+                    {l}
+                    {v === 'orders' && belowPar.length > 0 && (
+                      <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                        {belowPar.length > 9 ? '9+' : belowPar.length}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {tab === 'stock'        && <StockTab items={items} canE={canE} brand={brand} onRefresh={() => router.refresh()} />}
@@ -327,19 +362,21 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
     const supabase = createClient()
     const user  = (await supabase.auth.getUser()).data.user
     const delta = movType === 'in' || movType === 'adjustment' ? numQty : -numQty
-    const newQty = Math.max(0, selected.current_qty + delta)
-    const { error: movErr } = await (supabase.from('stock_movements') as any).insert({
-      brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
-      movement_type: movType, qty: numQty,
-      value: Math.round(numQty * (selected.cost ?? 0) * 10000) / 10000,
-      note: note || null, performed_by: user?.id ?? null,
+    // Atomic RPC: inserts movement + increments stock in one transaction (prevents lost-update race)
+    const { error } = await (supabase as any).rpc('record_stock_movement', {
+      p_brand_id:      brand,
+      p_ing_sku:       selected.sku,
+      p_ing_name:      selected.name,
+      p_unit:          selected.unit,
+      p_movement_type: movType,
+      p_qty:           numQty,
+      p_delta:         delta,
+      p_value:         Math.round(numQty * (selected.cost ?? 0) * 10000) / 10000,
+      p_note:          note || null,
+      p_performed_by:  user?.id ?? null,
+      p_min_qty:       selected.min_qty ?? 0,
     })
-    if (movErr) { setMsg({ ok: false, text: 'حدث خطأ أثناء تسجيل الحركة. أعد المحاولة.' }); setSaving(false); return }
-    await (supabase.from('stock_items') as any).upsert({
-      brand_id: brand, ing_sku: selected.sku, ing_name: selected.name,
-      unit: selected.unit, current_qty: newQty, min_qty: selected.min_qty,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: 'brand_id,ing_sku' })
+    if (error) { setMsg({ ok: false, text: 'حدث خطأ أثناء تسجيل الحركة. أعد المحاولة.' }); setSaving(false); return }
     setMsg({ ok: true, text: 'تمت الإضافة ✓' })
     setQty(''); setNote(''); setSelected(null); setSearch('')
     setSaving(false); onSaved()
@@ -350,9 +387,9 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
       <form onSubmit={handleSubmit} className="bg-white border border-gray-200 rounded-xl p-5 space-y-4">
         <div className="text-sm font-semibold text-gray-900">تسجيل حركة مخزون</div>
         <div className="space-y-1">
-          <label className="text-xs text-gray-500">الصنف</label>
+          <label htmlFor="mov-item" className="text-xs text-gray-500">الصنف</label>
           <div className="relative">
-            <input type="text" placeholder="ابحث بالاسم..." value={selected ? selected.name : search}
+            <input id="mov-item" type="text" placeholder="ابحث بالاسم..." value={selected ? selected.name : search}
               onChange={e => { setSearch(e.target.value); setSelected(null) }}
               className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
             />
@@ -384,24 +421,24 @@ function AddMovementTab({ items, brand, onSaved }: { items: InventoryItem[]; bra
         </div>
         <div className="space-y-1">
           <label className="text-xs text-gray-500">نوع الحركة</label>
-          <div className="grid grid-cols-4 gap-1">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1">
             {(['in', 'out', 'waste', 'adjustment'] as MovementType[]).map(t => (
               <button key={t} type="button" onClick={() => setMovType(t)}
-                className={`py-1.5 rounded-lg text-xs font-medium transition-colors ${movType === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                className={`py-3 rounded-lg text-xs font-medium transition-colors ${movType === t ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                 {movementLabel(t)}
               </button>
             ))}
           </div>
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-gray-500">الكمية{selected && <span className="text-gray-400 mr-1">({selected.unit})</span>}</label>
-          <input type="number" step="0.001" min="0.001" value={qty} onChange={e => setQty(e.target.value)} placeholder="0.000" required
+          <label htmlFor="mov-qty" className="text-xs text-gray-500">الكمية{selected && <span className="text-gray-400 mr-1">({selected.unit})</span>}</label>
+          <input id="mov-qty" type="number" step="0.001" min="0.001" value={qty} onChange={e => setQty(e.target.value)} placeholder="0.000" required
             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
           />
         </div>
         <div className="space-y-1">
-          <label className="text-xs text-gray-500">ملاحظة (اختياري)</label>
-          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="سبب الحركة..."
+          <label htmlFor="mov-note" className="text-xs text-gray-500">ملاحظة (اختياري)</label>
+          <input id="mov-note" type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="سبب الحركة..."
             className="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -511,6 +548,7 @@ function HistoryTab({ movements }: { movements: StockMovement[] }) {
 // ── Tab 4: Stocktake ──────────────────────────────────────────────
 
 function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[] }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
   const [sessions, setSessions]         = useState<StocktakeSession[]>([])
   const [activeSession, setActiveSession] = useState<StocktakeSession | null>(null)
   const [sessionItems, setSessionItems] = useState<StocktakeItem[]>([])
@@ -550,7 +588,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
     const { data: session, error } = await (supabase.from('stocktake_sessions') as any)
       .insert({ brand_id: brand, session_date: newDate, notes: newNotes || null, created_by: user?.id })
       .select().single()
-    if (error) { setSaving(false); alert(`فشل إنشاء جلسة الجرد: ${error.message}`); return }
+    if (error) { setSaving(false); setMsg({ ok: false, text: `فشل إنشاء جلسة الجرد: ${error.message}` }); return }
     const [{ data: ings }, { data: batchRecipes }] = await Promise.all([
       (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
       (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true),
@@ -587,49 +625,40 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
   async function doFinalize() {
     if (!activeSession) return
     setSaving(true)
-    const supabase = createClient()
-    const user = (await supabase.auth.getUser()).data.user
+    startLoading('جارٍ إنهاء جلسة الجرد...')
     const minQtyMap = new Map(items.map(i => [i.sku, i.min_qty]))
     const costMap   = new Map(items.map(i => [i.sku, i.cost ?? 0]))
-
-    for (const item of sessionItems) {
-      await (supabase.from('stocktake_items') as any).update({ actual_qty: item.actual_qty }).eq('id', item.id)
-    }
-
-    // Fetch live stock quantities at finalize time — not the frozen snapshot from session open
-    const sessionSkus = sessionItems.map(i => i.ing_sku)
-    const { data: liveStock } = await (supabase.from('stock_items') as any)
-      .select('ing_sku, current_qty')
-      .eq('brand_id', brand)
-      .in('ing_sku', sessionSkus)
-    const liveQtyMap = new Map<string, number>(
-      ((liveStock ?? []) as any[]).map(s => [s.ing_sku, s.current_qty ?? 0])
-    )
-
-    const note = `جرد دوري — ${activeSession.session_date}`
-    for (const item of sessionItems) {
-      const liveQty = liveQtyMap.get(item.ing_sku) ?? 0
-      const variance = item.actual_qty - liveQty
-      // Always set stock to the physically counted qty
-      await (supabase.from('stock_items') as any).upsert({
-        brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        unit: item.unit, current_qty: item.actual_qty, min_qty: minQtyMap.get(item.ing_sku) ?? 0,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: 'brand_id,ing_sku' })
-      if (Math.abs(variance) < 0.001) continue
-      await (supabase.from('stock_movements') as any).insert({
-        brand_id: brand, ing_sku: item.ing_sku, ing_name: item.ing_name,
-        movement_type: 'adjustment', qty: variance,
-        value: Math.round(variance * (costMap.get(item.ing_sku) ?? 0) * 10000) / 10000,
-        note, performed_by: user?.id ?? null,
+    try {
+      const res = await fetch(`/api/stocktake/${activeSession.id}/finalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brand_id: brand,
+          session_items: sessionItems.map(item => ({
+            id:         item.id,
+            ing_sku:    item.ing_sku,
+            ing_name:   item.ing_name,
+            unit:       item.unit,
+            actual_qty: item.actual_qty,
+            unit_cost:  costMap.get(item.ing_sku) ?? item.unit_cost,
+            min_qty:    minQtyMap.get(item.ing_sku) ?? 0,
+          })),
+        }),
       })
+      setSaving(false)
+      if (res.ok) {
+        setActiveSession(null); setSessionItems([])
+        await loadSessions()
+        setMsg({ ok: true, text: 'تم إنهاء الجرد وتحديث المخزون ✓' })
+        setTimeout(() => setMsg(null), 4000)
+      } else {
+        const d = await res.json().catch(() => ({}))
+        const status = res.status
+        setMsg({ ok: false, text: status === 423 ? (d.error ?? 'الفترة مُغلقة') : (d.error ?? 'فشل إنهاء الجرد') })
+      }
+    } finally {
+      stopLoading()
     }
-    await (supabase.from('stocktake_sessions') as any)
-      .update({ status: 'finalized', finalized_at: new Date().toISOString() }).eq('id', activeSession.id)
-    setSaving(false); setActiveSession(null); setSessionItems([])
-    await loadSessions()
-    setMsg({ ok: true, text: 'تم إنهاء الجرد وتحديث المخزون ✓' })
-    setTimeout(() => setMsg(null), 4000)
   }
 
   function handleFinalize() {
@@ -639,14 +668,23 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
 
   function handleApproveSession(sessionId: string) {
     setDlg({ msg: 'اعتماد هذا الجرد؟ لن يمكن التراجع.', onOk: async () => {
-      const res = await fetch(`/api/stocktake/${sessionId}/approve`, { method: 'POST' })
-      if (res.ok) {
-        await loadSessions()
-        setMsg({ ok: true, text: 'تم اعتماد الجرد ✓' })
-        setTimeout(() => setMsg(null), 3000)
-      } else {
-        const d = await res.json()
-        setMsg({ ok: false, text: d.error ?? 'فشل الاعتماد' })
+      startLoading('جارٍ اعتماد جلسة الجرد...')
+      try {
+        const res = await fetch(`/api/stocktake/${sessionId}/approve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ brand_id: brand }),
+        })
+        if (res.ok) {
+          await loadSessions()
+          setMsg({ ok: true, text: 'تم اعتماد الجرد ✓' })
+          setTimeout(() => setMsg(null), 3000)
+        } else {
+          const d = await res.json()
+          setMsg({ ok: false, text: d.error ?? 'فشل الاعتماد' })
+        }
+      } finally {
+        stopLoading()
       }
     }})
   }
@@ -717,7 +755,7 @@ function StocktakeTab({ brand, items }: { brand: BrandId; items: InventoryItem[]
                         <input type="number" step="0.001" min="0" value={item.actual_qty}
                           disabled={activeSession.status === 'finalized'}
                           onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0) setSessionItems(prev => prev.map(i => i.id === item.id ? { ...i, actual_qty: v } : i)) }}
-                          className="w-24 text-center bg-white border border-gray-300 rounded px-2 py-0.5 text-xs font-mono focus:outline-none focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
+                          className="w-32 text-center bg-white border border-gray-300 rounded px-2 py-2 text-xs font-mono focus:outline-none focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-500"
                         />
                       </td>
                       <td className={`px-4 py-2.5 text-center font-mono text-xs font-semibold ${!hasV ? 'text-gray-400' : variance < 0 ? 'text-red-600' : 'text-green-600'}`}>
@@ -835,14 +873,19 @@ function AvailabilityTab({ brand }: { brand: BrandId }) {
   const LOW = 10
 
   useEffect(() => {
+    let cancelled = false
     const load = async () => {
       setLoading(true)
       const supabase = createClient()
-      const [{ data: recipes }, { data: ings }, { data: stockRows }] = await Promise.all([
+      const [{ data: recipes }, { data: stockRows }] = await Promise.all([
         (supabase.from('recipes') as any).select('id, sku, product_name, yield_portions').eq('brand_id', brand).eq('is_active', true).eq('is_approved', true).eq('is_semi', false),
-        (supabase.from('recipe_ingredients') as any).select('recipe_id, ing_sku, ing_name, qty, yield_pct'),
         (supabase.from('stock_items') as any).select('ing_sku, current_qty').eq('brand_id', brand),
       ])
+      const recipeIds = ((recipes || []) as any[]).map((r: any) => r.id)
+      const { data: ings } = recipeIds.length > 0
+        ? await (supabase.from('recipe_ingredients') as any).select('recipe_id, ing_sku, ing_name, qty, yield_pct').in('recipe_id', recipeIds)
+        : { data: [] }
+      if (cancelled) return
       const stockMap = new Map<string, number>()
       for (const s of (stockRows || []) as any[]) stockMap.set(s.ing_sku, s.current_qty)
       const result: DishAvail[] = []
@@ -865,6 +908,7 @@ function AvailabilityTab({ brand }: { brand: BrandId }) {
       setDishes(result); setLoading(false)
     }
     load()
+    return () => { cancelled = true }
   }, [brand])
 
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحليل...</div>
@@ -876,7 +920,7 @@ function AvailabilityTab({ brand }: { brand: BrandId }) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className={`rounded-xl border p-4 text-center ${blocked.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
           <div className={`text-3xl font-bold font-mono ${blocked.length > 0 ? 'text-red-600' : 'text-gray-300'}`}>{blocked.length}</div>
-          <div className={`text-xs font-semibold mt-1 ${blocked.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>🔴 معطّل (86)</div>
+          <div className={`text-xs font-semibold mt-1 ${blocked.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>🔴 معطّل</div>
           <div className="text-xs text-gray-400 mt-0.5">لا يمكن تحضيره الآن</div>
         </div>
         <div className={`rounded-xl border p-4 text-center ${low.length > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
@@ -936,6 +980,7 @@ function AgingTab({ brand }: { brand: BrandId }) {
   const [sortBy, setSortBy]   = useState<'days' | 'value'>('days')
 
   useEffect(() => {
+    let cancelled = false
     const load = async () => {
       setLoading(true)
       const supabase = createClient()
@@ -945,6 +990,7 @@ function AgingTab({ brand }: { brand: BrandId }) {
         (supabase.from('ingredients') as any).select('sku, cost').eq('brand_id', brand),
         (supabase.from('recipes') as any).select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true),
       ])
+      if (cancelled) return
       const lastMoveMap = new Map<string, string>()
       for (const m of (moves || []) as any[]) { if (!lastMoveMap.has(m.ing_sku)) lastMoveMap.set(m.ing_sku, m.created_at) }
       const costMap = new Map<string, number>()
@@ -964,6 +1010,7 @@ function AgingTab({ brand }: { brand: BrandId }) {
       setItems(result); setLoading(false)
     }
     load()
+    return () => { cancelled = true }
   }, [brand, days, sortBy])
 
   if (loading) return <div className="py-16 text-center text-gray-400 text-sm">جارٍ التحليل...</div>
@@ -1070,6 +1117,7 @@ function LedgerTab({ items, brand }: { items: InventoryItem[]; brand: BrandId })
   const [rows, setRows]               = useState<LedgerRow[]>([])
   const [openingBalance, setOpeningBalance] = useState<number | null>(null)
   const [closingBalance, setClosingBalance] = useState<number | null>(null)
+  const cancelRef = useRef(false)
 
   const selectedItem = items.find(i => i.sku === selectedSku) ?? null
   const filteredItems = search.length >= 1
@@ -1078,6 +1126,7 @@ function LedgerTab({ items, brand }: { items: InventoryItem[]; brand: BrandId })
 
   const load = useCallback(async () => {
     if (!selectedSku) return
+    cancelRef.current = false
     setLoading(true)
     const supabase = createClient()
 
@@ -1128,13 +1177,17 @@ function LedgerTab({ items, brand }: { items: InventoryItem[]; brand: BrandId })
       }
     })
 
+    if (cancelRef.current) return
     setOpeningBalance(Math.round(opening * 1000) / 1000)
     setClosingBalance(Math.round(closing * 1000) / 1000)
     setRows(ledgerRows)
     setLoading(false)
   }, [brand, selectedSku, fromDate, toDate])
 
-  useEffect(() => { if (selectedSku) load() }, [load, selectedSku])
+  useEffect(() => {
+    if (selectedSku) load()
+    return () => { cancelRef.current = true }
+  }, [load, selectedSku])
 
   // Summary stats
   const totalIn    = rows.filter(r => r.movement_type === 'in').reduce((s, r) => s + r.qty, 0)

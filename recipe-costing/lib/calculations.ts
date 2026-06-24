@@ -73,3 +73,38 @@ export function fcColor(pct: number): 'green' | 'yellow' | 'red' {
 export function fmt(n: number, decimals = 2): string {
   return n.toFixed(decimals)
 }
+
+/**
+ * حساب خصم المخزون لمكوّن واحد عند الانفجار.
+ * totalDeduct = (qty / (yieldPct/100) / yieldPortions * qtySold) / ucFactor
+ * إذا yieldPct <= 0 → 0 (مكوّن معطّل)
+ */
+export function calcDeduction(
+  qty: number,
+  yieldPct: number,
+  yieldPortions: number,
+  qtySold: number,
+  ucFactor = 1,
+): number {
+  if (yieldPct <= 0) return 0
+  const grossPerPortion = qty / (yieldPct / 100) / Math.max(yieldPortions, 1)
+  return (grossPerPortion * qtySold) / (ucFactor || 1)
+}
+
+/**
+ * حساب WAC — المتوسط المرجّح للتكلفة.
+ * أول شراء (currentQty=0)    → purchaseValue / purchaseQty
+ * مجاني (purchaseValue=0)    → currentCost (الكمية تُضاف، التكلفة تثبت)
+ * كمية+قيمة=0               → null (لا شيء يُحسب)
+ */
+export function calcWac(
+  currentQty: number,
+  currentCost: number,
+  purchaseQty: number,
+  purchaseValue: number,
+): number | null {
+  if (purchaseQty <= 0 && purchaseValue <= 0) return null
+  if (purchaseValue <= 0) return currentCost
+  if (currentQty <= 0) return purchaseQty > 0 ? purchaseValue / purchaseQty : null
+  return (currentQty * currentCost + purchaseValue) / (currentQty + purchaseQty)
+}

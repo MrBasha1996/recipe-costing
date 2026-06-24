@@ -7,6 +7,7 @@ import { useUserStore } from '@/stores/userStore'
 import ProductTable from '@/components/products/ProductTable'
 import ProductForm from '@/components/products/ProductForm'
 import { exportProducts, importProducts, downloadProductsTemplate } from '@/lib/dataImportExport'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import type { Product, BrandId } from '@/types'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 
@@ -18,6 +19,7 @@ interface Props {
 export default function ProductsClient({ initialProducts, brand }: Props) {
   const router = useRouter()
   const { canEdit, canSeePrices } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const [products, setProducts] = useState<Product[]>(initialProducts)
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
@@ -92,6 +94,7 @@ export default function ProductsClient({ initialProducts, brand }: Props) {
                     e.target.value = ''
                     setImporting(true)
                     setImportMsg(null)
+                    startLoading('جارٍ استيراد المنتجات...')
                     const supabase = createClient()
                     try {
                       const res = await importProducts(file, brand, supabase)
@@ -101,6 +104,7 @@ export default function ProductsClient({ initialProducts, brand }: Props) {
                       setImportMsg(`خطأ: ${e.message}`)
                     } finally {
                       setImporting(false)
+                      stopLoading()
                     }
                   }}
                   className="hidden"

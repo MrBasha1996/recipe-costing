@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { BrandId } from '@/types'
 
@@ -50,6 +51,7 @@ function StatusBadge({ status }: { status: Session['status'] }) {
 
 export default function ProductionClient({ brand }: { brand: BrandId }) {
   const { canEdit, profile } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const canE = canEdit('production')
 
   const [tab, setTab] = useState<'new' | 'sessions' | 'cost-analysis'>('new')
@@ -217,6 +219,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
   async function handleProduce() {
     if (!selectedSku || !rows.length) return
     setProducing(true); setResult(null)
+    startLoading('جارٍ تنفيذ الإنتاج...')
     try {
       const res = await fetch('/api/batches/produce', {
         method: 'POST',
@@ -245,6 +248,7 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
       setResult({ ok: false, text: 'تعذّر الاتصال بالخادم' })
     } finally {
       setProducing(false)
+      stopLoading()
     }
   }
 
@@ -253,15 +257,20 @@ export default function ProductionClient({ brand }: { brand: BrandId }) {
   async function handleApprove(id: string) {
     setActionLoading(id + '_approve')
     setActionMsg(null)
-    const res = await fetch(`/api/production/sessions/${id}/approve?brand_id=${brand}`, { method: 'POST' })
-    const data = await res.json()
-    if (res.ok) {
-      setActionMsg({ ok: true, text: 'تم اعتماد الجلسة' })
-      loadSessions(sessionsOffset)
-    } else {
-      setActionMsg({ ok: false, text: data.error ?? 'خطأ' })
+    startLoading('جارٍ اعتماد جلسة الإنتاج...')
+    try {
+      const res = await fetch(`/api/production/sessions/${id}/approve?brand_id=${brand}`, { method: 'POST' })
+      const data = await res.json()
+      if (res.ok) {
+        setActionMsg({ ok: true, text: 'تم اعتماد الجلسة' })
+        loadSessions(sessionsOffset)
+      } else {
+        setActionMsg({ ok: false, text: data.error ?? 'خطأ' })
+      }
+    } finally {
+      setActionLoading(null)
+      stopLoading()
     }
-    setActionLoading(null)
   }
 
   function handleDelete(id: string) {

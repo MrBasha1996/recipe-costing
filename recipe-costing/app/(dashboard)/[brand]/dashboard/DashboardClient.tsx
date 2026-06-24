@@ -1,15 +1,15 @@
 'use client'
 
 import { useState } from 'react'
+import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
 import { FC_TARGET } from '@/lib/calculations'
 import KPICards from '@/components/dashboard/KPICards'
-import FCDistributionChart from '@/components/dashboard/FCDistributionChart'
-import Top10Chart from '@/components/dashboard/Top10Chart'
 import OverTargetTable from '@/components/dashboard/OverTargetTable'
-import { exportRecipesExcel } from '@/lib/excel'
+const FCDistributionChart = dynamic(() => import('@/components/dashboard/FCDistributionChart'), { ssr: false })
+const Top10Chart = dynamic(() => import('@/components/dashboard/Top10Chart'), { ssr: false })
 import type { Recipe, BrandId } from '@/types'
 
 type DashTab = 'ops' | 'recipes'
@@ -69,6 +69,7 @@ export default function DashboardClient({ recipes, opsData, brand, fcLow, fcHigh
         unit_cost: ri.unit_cost, yield_pct: ri.yield_pct,
         line_cost: ri.qty > 0 && ri.yield_pct > 0 ? (ri.qty / (ri.yield_pct / 100)) * ri.unit_cost : 0,
       }))
+      const { exportRecipesExcel } = await import('@/lib/excel')
       await exportRecipesExcel(recipes, ingExport, (history as any[]) || [])
     } finally { setExporting(false) }
   }
@@ -284,7 +285,7 @@ export default function DashboardClient({ recipes, opsData, brand, fcLow, fcHigh
             <KPICards avgFC={avgFC} overTargetCount={overTarget.length} totalRecipes={recipes.length} avgMargin={avgMargin} />
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <FCDistributionChart data={distribution} />
-              <Top10Chart recipes={recipes.slice(0, 10)} />
+              <Top10Chart recipes={[...recipes].sort((a, b) => b.food_cost_pct - a.food_cost_pct).slice(0, 10)} />
             </div>
             {overTarget.length > 0 && <OverTargetTable recipes={overTarget} />}
           </>

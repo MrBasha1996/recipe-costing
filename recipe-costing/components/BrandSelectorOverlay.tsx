@@ -4,8 +4,6 @@ import { useEffect, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import type { BrandId } from '@/types'
 
-const VEG_URL = process.env.NEXT_PUBLIC_VEG_APP_URL ?? 'http://localhost:5173'
-
 interface Props {
   visible: boolean
   currentBrand: BrandId
@@ -64,18 +62,29 @@ const DEFAULT_STYLE: BrandStyle = {
   btnShadow: 'rgba(148,163,184,0.4)',
 }
 
+interface BrandRow {
+  id: string
+  name: string
+  name_ar: string
+  is_standalone: boolean
+  external_url: string | null
+  primary_color: string | null
+}
+
 export default function BrandSelectorOverlay({ visible, currentBrand, onPick, onClose, canClose }: Props) {
   const [show, setShow] = useState(false)
   const [leaving, setLeaving] = useState(false)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
-  const [brands, setBrands] = useState<{ id: string; name: string; name_ar: string }[]>([])
+  const [brands, setBrands] = useState<BrandRow[]>([])
   const fetchedRef = useRef(false)
 
   useEffect(() => {
     if (!visible || fetchedRef.current) return
     fetchedRef.current = true
     const supabase = createClient()
-    ;(supabase.from('brands') as any).select('id, name, name_ar').order('id')
+    ;(supabase.from('brands') as any)
+      .select('id, name, name_ar, is_standalone, external_url, primary_color')
+      .order('id')
       .then(({ data }: any) => { if (data) setBrands(data) })
   }, [visible])
 
@@ -101,6 +110,9 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
   }
 
   if (!visible) return null
+
+  const regularBrands = brands.filter(b => !b.is_standalone)
+  const standaloneBrands = brands.filter(b => b.is_standalone)
 
   return (
     <div
@@ -142,9 +154,9 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
         </div>
 
         {/* Brand Cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: brands.length === 1 ? '1fr' : '1fr 1fr', gap: 20 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: regularBrands.length === 1 ? '1fr' : '1fr 1fr', gap: 20 }}>
 
-          {brands.map((brand, idx) => {
+          {regularBrands.map((brand, idx) => {
             const style = BRAND_STYLES[brand.id] ?? DEFAULT_STYLE
             const isActive  = currentBrand === brand.id
             const isHovered = hoveredId === brand.id
@@ -211,26 +223,36 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
             )
           })}
 
-          {/* ── Vegetable system — full width ── */}
-          {(() => {
-            const isHovered = hoveredId === 'veg'
+          {/* ── Standalone systems — one per row, full width ── */}
+          {standaloneBrands.map((brand) => {
+            const isHovered = hoveredId === brand.id
+            const color = brand.primary_color ?? '#22c55e'
+            const colorAlpha = (a: number) => {
+              // Parse hex to rgba for dynamic color usage
+              const r = parseInt(color.slice(1, 3), 16)
+              const g = parseInt(color.slice(3, 5), 16)
+              const b = parseInt(color.slice(5, 7), 16)
+              return `rgba(${r},${g},${b},${a})`
+            }
+
             return (
               <div
-                onClick={() => { window.location.href = VEG_URL }}
-                onMouseEnter={() => setHoveredId('veg')}
+                key={brand.id}
+                onClick={() => { if (brand.external_url) window.location.href = brand.external_url }}
+                onMouseEnter={() => setHoveredId(brand.id)}
                 onMouseLeave={() => setHoveredId(null)}
                 style={{
                   gridColumn: '1 / -1',
                   background: isHovered
-                    ? 'linear-gradient(145deg, #052010 0%, #0a3018 40%, #0f4a28 100%)'
-                    : 'linear-gradient(145deg, #041a0d 0%, #072415 40%, #0c3820 100%)',
-                  border: `1px solid ${isHovered ? 'rgba(34,197,94,0.45)' : 'rgba(34,197,94,0.18)'}`,
+                    ? `linear-gradient(145deg, #052010 0%, #0a3018 40%, #0f4a28 100%)`
+                    : `linear-gradient(145deg, #041a0d 0%, #072415 40%, #0c3820 100%)`,
+                  border: `1px solid ${isHovered ? colorAlpha(0.45) : colorAlpha(0.18)}`,
                   borderRadius: 20,
                   padding: '24px 28px',
-                  cursor: 'pointer',
+                  cursor: brand.external_url ? 'pointer' : 'default',
                   transition: 'border-color 0.2s, box-shadow 0.25s, background 0.25s',
                   boxShadow: isHovered
-                    ? '0 16px 50px rgba(34,197,94,0.15), 0 0 0 1px rgba(34,197,94,0.35)'
+                    ? `0 16px 50px ${colorAlpha(0.15)}, 0 0 0 1px ${colorAlpha(0.35)}`
                     : '0 4px 20px rgba(0,0,0,0.3)',
                   position: 'relative',
                   overflow: 'hidden',
@@ -241,46 +263,48 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
               >
                 <div style={{
                   position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                  background: 'linear-gradient(to right, #14532d, #22c55e, #86efac)',
+                  background: `linear-gradient(to right, ${color}88, ${color}, ${color}aa)`,
                   borderRadius: '20px 20px 0 0',
                 }} />
                 <div style={{
                   position: 'absolute', top: 16, left: 16,
                   fontSize: 11, fontWeight: 700, letterSpacing: '0.08em',
-                  background: 'rgba(34,197,94,0.15)', color: '#86efac',
+                  background: colorAlpha(0.15), color: color,
                   padding: '4px 12px', borderRadius: 20,
-                  border: '1px solid rgba(34,197,94,0.3)',
+                  border: `1px solid ${colorAlpha(0.3)}`,
                 }}>
                   ↗ نظام مستقل
                 </div>
                 <div style={{
                   width: 72, height: 72, borderRadius: 18, flexShrink: 0,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 36, background: 'rgba(34,197,94,0.1)',
-                  border: '1px solid rgba(34,197,94,0.3)',
+                  fontSize: 36, background: colorAlpha(0.1),
+                  border: `1px solid ${colorAlpha(0.3)}`,
                 }}>
                   🥬
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>GreenBasket</div>
-                  <div style={{ fontSize: 13, color: '#86efac', marginTop: 2 }}>نظام الخضار والفاكهة</div>
-                  <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', marginTop: 6 }}>
-                    خضار · فاكهة · أعشاب — مبيعات بالكجم، عملاء B2B، تكلفة شهرية
-                  </div>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', lineHeight: 1.2 }}>{brand.name}</div>
+                  <div style={{ fontSize: 13, color, marginTop: 2 }}>{brand.name_ar}</div>
+                  {brand.external_url && (
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.3)', marginTop: 4, fontFamily: 'monospace' }}>
+                      {brand.external_url}
+                    </div>
+                  )}
                 </div>
                 <button style={{
                   padding: '12px 28px', borderRadius: 12, border: 'none', flexShrink: 0,
-                  background: isHovered ? 'linear-gradient(135deg, #15803d, #22c55e)' : 'rgba(34,197,94,0.12)',
-                  color: isHovered ? '#fff' : '#86efac',
+                  background: isHovered ? color : colorAlpha(0.12),
+                  color: isHovered ? '#fff' : color,
                   fontSize: 14, fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s',
-                  boxShadow: isHovered ? '0 8px 24px rgba(34,197,94,0.35)' : 'none',
+                  boxShadow: isHovered ? `0 8px 24px ${colorAlpha(0.35)}` : 'none',
                   letterSpacing: '0.03em', whiteSpace: 'nowrap',
                 }}>
                   فتح النظام ↗
                 </button>
               </div>
             )
-          })()}
+          })}
 
         </div>
 
@@ -297,7 +321,7 @@ export default function BrandSelectorOverlay({ visible, currentBrand, onPick, on
               onMouseEnter={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.7)')}
               onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.3)')}
             >
-              إغلاق ← الاستمرار مع {brands.find(b => b.id === currentBrand)?.name_ar ?? currentBrand}
+              إغلاق ← الاستمرار مع {regularBrands.find(b => b.id === currentBrand)?.name_ar ?? currentBrand}
             </button>
           </div>
         )}

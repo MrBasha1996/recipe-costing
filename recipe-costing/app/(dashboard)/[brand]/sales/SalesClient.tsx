@@ -10,6 +10,7 @@ import { VAT_RATE } from '@/lib/calculations'
 import { parseFoodicsFile } from '@/lib/parseFoodics'
 import type { SaleRow, FoodicsCancellationRow, FoodicsModifierRow, BrandId } from '@/types'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 
 type SourceType = 'excel' | 'foodics_sales' | 'foodics_cancel' | 'foodics_modifiers'
 
@@ -30,6 +31,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
   const router = useRouter()
   const { profile } = useUserStore()
   const { isSuperAdmin, hasPermission } = usePermissionsStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const canImport = isSuperAdmin || hasPermission('sales', 'import')
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -44,6 +46,8 @@ export default function SalesClient({ initialBatches, brand }: Props) {
   const [importing, setImporting]           = useState(false)
   const [importMsg, setImportMsg]           = useState<{ ok: boolean; text: string } | null>(null)
   const [deletingBatch, setDeletingBatch]   = useState<string | null>(null)
+  const [reversingBatch, setReversingBatch] = useState<string | null>(null)
+  const [reverseMsg, setReverseMsg]         = useState<{ ok: boolean; text: string } | null>(null)
   const [dlg, setDlg] = useState<{ msg: string; onOk: () => void } | null>(null)
   const [detectedDate, setDetectedDate]     = useState<string>('')
   const [lastImportBatch, setLastImportBatch]   = useState<string | null>(null)
@@ -89,6 +93,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
   async function handleImportSales() {
     if (salesPreview.length === 0) return
     setImporting(true); setImportMsg(null)
+    startLoading('جارٍ استيراد المبيعات...')
     try {
       const supabase = createClient()
       const batchId  = crypto.randomUUID()
@@ -110,7 +115,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
       router.refresh()
     } catch (err: any) {
       setImportMsg({ ok: false, text: `خطأ: ${err.message}` })
-    } finally { setImporting(false) }
+    } finally { setImporting(false); stopLoading() }
   }
 
   async function handleImportCancellations() {
@@ -141,6 +146,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
       setImportMsg({ ok: false, text: 'يرجى تحديد الفترة الزمنية للاستيراد' }); return
     }
     setImporting(true); setImportMsg(null)
+    startLoading('جارٍ استيراد مبيعات الإضافات...')
     try {
       const supabase = createClient()
       // Period close guard
@@ -165,7 +171,7 @@ export default function SalesClient({ initialBatches, brand }: Props) {
       setModifierPreview([]); setSourceType(null)
     } catch (err: any) {
       setImportMsg({ ok: false, text: `خطأ: ${err.message}` })
-    } finally { setImporting(false) }
+    } finally { setImporting(false); stopLoading() }
   }
 
   function handleDeleteBatch(batchId: string) {
@@ -175,6 +181,25 @@ export default function SalesClient({ initialBatches, brand }: Props) {
       await (supabase.from('daily_sales') as any).delete().eq('import_batch', batchId)
       setDeletingBatch(null)
       router.refresh()
+    }})
+  }
+
+  function handleReverseExplode(batchId: string) {
+    setDlg({ msg: 'عكس الانفجار سيُرجع كميات المواد للمخزون ويُعيد الدفعة لحالة "غير محتسبة". هل أنت متأكد؟', onOk: async () => {
+      setReversingBatch(batchId)
+      setReverseMsg(null)
+      const res = await fetch('/api/sales/reverse-explode', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brand_id: brand, import_batch: batchId }),
+      })
+      const data = await res.json()
+      setReversingBatch(null)
+      if (!res.ok) {
+        setReverseMsg({ ok: false, text: data.error ?? 'خطأ غير متوقع' })
+      } else {
+        setReverseMsg({ ok: true, text: `تم العكس — أُرجعت ${data.movements_del ?? 0} حركة خصم للمخزون ✓` })
+        router.refresh()
+      }
     }})
   }
 
@@ -194,17 +219,19 @@ export default function SalesClient({ initialBatches, brand }: Props) {
   async function handleExplodeExecute() {
     if (!lastImportBatch) return
     setExploding(true); setExplodeResult(null)
+    startLoading('جارٍ احتساب التكلفة وخصم المخزون...')
     const res = await fetch('/api/sales/explode', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ brand_id: brand, import_batch: lastImportBatch, auto_produce_batches: true, performed_by: profile?.id ?? null }),
     })
     const data = await res.json()
-    if (!res.ok) { setExplodeResult({ ok: false, text: data.error }); setExploding(false); return }
+    if (!res.ok) { setExplodeResult({ ok: false, text: data.error }); setExploding(false); stopLoading(); return }
     const parts = [`خُصم ${data.deducted ?? 0} صنف من المخزون`]
     if (data.produced_batches?.length) parts.push(`أُنتج ${data.produced_batches.length} باتش تلقائياً`)
     if (data.skipped) parts.push(`تخطّى ${data.skipped} منتج بلا وصفة`)
     setExplodeResult({ ok: true, text: parts.join(' · ') + ' ✓' })
     setLastImportBatch(null); setExploding(false)
+    stopLoading()
     router.refresh()
   }
 
@@ -511,6 +538,12 @@ export default function SalesClient({ initialBatches, brand }: Props) {
         </div>
       )}
 
+      {reverseMsg && (
+        <div className={`rounded-lg px-4 py-3 text-sm border ${reverseMsg.ok ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+          {reverseMsg.text}
+        </div>
+      )}
+
       {/* Explode Panel */}
       {lastImportBatch && !sourceType && (
         <div className="bg-white border border-blue-200 rounded-xl overflow-hidden">
@@ -656,7 +689,17 @@ export default function SalesClient({ initialBatches, brand }: Props) {
                   <td className="px-4 py-3 text-end font-mono font-semibold text-gray-800">{b.total_revenue.toFixed(2)} ر.س</td>
                   <td className="px-4 py-3 text-center" onClick={e => e.stopPropagation()}>
                     {b.exploded_at ? (
-                      <span className="text-xs text-green-600 font-medium">✓ محتسب</span>
+                      <div className="flex items-center gap-2 justify-center">
+                        <span className="text-xs text-green-600 font-medium">✓ محتسب</span>
+                        {isSuperAdmin && (
+                          <button
+                            onClick={() => handleReverseExplode(b.import_batch)}
+                            disabled={reversingBatch === b.import_batch}
+                            className="text-xs px-2 py-0.5 bg-orange-50 border border-orange-300 text-orange-700 rounded hover:bg-orange-100 disabled:opacity-40 whitespace-nowrap">
+                            {reversingBatch === b.import_batch ? '...' : '↩ عكس'}
+                          </button>
+                        )}
+                      </div>
                     ) : (
                       <button onClick={() => { setLastImportBatch(b.import_batch); setShowExplodePanel(false); setExplodeCheckData(null); setExplodeResult(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
                         className="text-xs px-2 py-1 bg-amber-50 border border-amber-300 text-amber-700 rounded-lg hover:bg-amber-100 font-medium whitespace-nowrap">

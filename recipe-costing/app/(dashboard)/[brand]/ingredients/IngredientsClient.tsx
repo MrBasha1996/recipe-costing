@@ -9,6 +9,7 @@ import IngredientForm from '@/components/ingredients/IngredientForm'
 import PriceImpactModal from '@/components/shared/PriceImpactModal'
 import { downloadPriceTemplate, parsePriceFile } from '@/lib/excel'
 import { exportIngredients, importIngredients, downloadIngredientsTemplate } from '@/lib/dataImportExport'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import type { Ingredient, BrandId, UnitConversion } from '@/types'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import type { PriceChange } from '@/lib/excel'
@@ -22,6 +23,7 @@ interface Props {
 export default function IngredientsClient({ initialIngredients, initialConversions, brand }: Props) {
   const router = useRouter()
   const { canEdit, canSeePrices, isAccountant } = useUserStore()
+  const { startLoading, stopLoading } = useGlobalLoading()
   const [ingredients, setIngredients] = useState<Ingredient[]>(initialIngredients)
   const [conversions, setConversions] = useState<UnitConversion[]>(initialConversions)
   const [search, setSearch] = useState('')
@@ -77,7 +79,7 @@ export default function IngredientsClient({ initialIngredients, initialConversio
   function handleDelete(i: Ingredient) {
     setDlg({ msg: `حذف "${i.name}"؟`, onOk: async () => {
       const supabase = createClient()
-      await supabase.from('ingredients').delete().eq('sku', i.sku).eq('brand_id', i.brand_id)
+      await (supabase.from('ingredients') as any).update({ deleted_at: new Date().toISOString() }).eq('sku', i.sku).eq('brand_id', i.brand_id)
       router.refresh()
     }})
   }
@@ -183,6 +185,7 @@ export default function IngredientsClient({ initialIngredients, initialConversio
                     e.target.value = ''
                     setImporting(true)
                     setImportMsg(null)
+                    startLoading('جارٍ استيراد المواد الخام...')
                     const supabase = createClient()
                     try {
                       const res = await importIngredients(file, brand, supabase)
@@ -192,6 +195,7 @@ export default function IngredientsClient({ initialIngredients, initialConversio
                       setImportMsg(`خطأ: ${e.message}`)
                     } finally {
                       setImporting(false)
+                      stopLoading()
                     }
                   }}
                   className="hidden"

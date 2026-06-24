@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import ComboTable from '@/components/combos/ComboTable'
 import ComboForm from '@/components/combos/ComboForm'
 import type { ComboMeal, BrandId } from '@/types'
@@ -17,6 +18,7 @@ interface Props {
 export default function CombosClient({ initialCombos, brand }: Props) {
   const router = useRouter()
   const { canEdit, canSeePrices } = useUserStore()
+  const { startLoading, stopLoading, updateProgress } = useGlobalLoading()
   const [combos, setCombos] = useState<ComboMeal[]>(initialCombos)
   const [search, setSearch] = useState('')
   const [showForm, setShowForm] = useState(false)
@@ -47,6 +49,7 @@ export default function CombosClient({ initialCombos, brand }: Props) {
   async function doRecalcAll() {
     setRecalculating(true)
     setRecalcMsg(null)
+    startLoading('جارٍ إعادة احتساب تكاليف الكومبو...')
     try {
       const supabase = createClient()
 
@@ -117,6 +120,7 @@ export default function CombosClient({ initialCombos, brand }: Props) {
           })
           .eq('id', combo.id)
         updated++
+        updateProgress(updated, comboList.length)
       }
 
       setRecalcMsg({ ok: true, text: `تم تحديث ${updated} كومبو ✓` })
@@ -125,6 +129,7 @@ export default function CombosClient({ initialCombos, brand }: Props) {
       setRecalcMsg({ ok: false, text: `خطأ: ${e.message}` })
     } finally {
       setRecalculating(false)
+      stopLoading()
     }
   }
 

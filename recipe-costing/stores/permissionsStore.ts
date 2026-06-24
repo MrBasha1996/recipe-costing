@@ -29,7 +29,7 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
   subscribeToChanges: async (userId: string, supabase: SupabaseClient) => {
     const prev = get()._realtimeChannel
     if (prev) await supabase.removeChannel(prev)
-    const channel = (supabase.channel(`user_profile_${userId}`) as any)
+    const channel = (supabase.channel(`user_profile_${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}`) as any)
       .on('postgres_changes', {
         event: 'UPDATE',
         schema: 'public',
@@ -99,23 +99,6 @@ export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
       }
 
       set({ permissions: map, isSuperAdmin: false, roleName, loaded: true })
-
-      // Realtime: unsubscribe القناة القديمة قبل إنشاء جديدة
-      const prev = get()._realtimeChannel
-      if (prev) await supabase.removeChannel(prev)
-
-      const channel = (supabase.channel(`user_profile_${userId}`) as any)
-        .on('postgres_changes', {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'user_profiles',
-          filter: `id=eq.${userId}`,
-        }, () => {
-          get().loadPermissions(userId, supabase)
-        })
-        .subscribe()
-
-      set({ _realtimeChannel: channel })
     } catch (err) {
       console.error('[permissionsStore] Failed to load permissions:', err)
       set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: true })

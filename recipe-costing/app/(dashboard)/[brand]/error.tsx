@@ -19,8 +19,10 @@ export default function DashboardError({
       <div className="bg-white border border-red-200 rounded-2xl p-8 max-w-md w-full text-center shadow-sm">
         <div className="text-4xl mb-4">⚠️</div>
         <h2 className="text-lg font-bold text-gray-900 mb-2">حدث خطأ</h2>
-        <p className="text-gray-500 text-sm mb-1">{error.message}</p>
-        {error.digest && (
+        <p className="text-gray-500 text-sm mb-1">
+          {process.env.NODE_ENV === 'development' ? error.message : 'حدث خطأ غير متوقع، يرجى تحديث الصفحة'}
+        </p>
+        {process.env.NODE_ENV === 'development' && error.digest && (
           <p className="text-gray-400 text-xs font-mono mb-4">Digest: {error.digest}</p>
         )}
         <div className="flex gap-3 justify-center mt-5">

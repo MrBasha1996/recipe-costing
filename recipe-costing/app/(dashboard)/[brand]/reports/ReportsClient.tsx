@@ -5,9 +5,10 @@ import { useParams } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/stores/userStore'
 import { usePermissionsStore } from '@/stores/permissionsStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
 import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange, shiftMonth } from '@/lib/period'
 import type { BrandId } from '@/types'
-import { VAT_RATE } from '@/lib/calculations'
+import { VAT_RATE, FC_TARGET } from '@/lib/calculations'
 import { exportPLReport } from '@/lib/excel'
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
@@ -15,7 +16,7 @@ import {
   ScatterChart, Scatter, ReferenceLine, ZAxis,
 } from 'recharts'
 
-type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl' | 'snapshot'
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl' | 'snapshot' | 'waste' | 'inv-valuation' | 'stocktake-variance'
 
 const TAB_MODULE: Record<ReportTab, string> = {
   'pl':          'report_pl',
@@ -34,8 +35,11 @@ const TAB_MODULE: Record<ReportTab, string> = {
   'dine':        'report_dine',
   'discounts':   'report_discounts',
   'consumption': 'report_consumption',
-  'compare-pl':  'report_compare_pl',
-  'snapshot':    'report_pl',
+  'compare-pl':     'report_compare_pl',
+  'snapshot':       'report_pl',
+  'waste':              'report_waste',
+  'inv-valuation':      'report_inv_valuation',
+  'stocktake-variance': 'report_stocktake_variance',
 }
 
 interface Props {
@@ -117,8 +121,11 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
     { key: 'dine',        label: 'داخل vs توصيل' },
     { key: 'discounts',   label: 'الخصومات والمرتجعات' },
     { key: 'consumption', label: 'استهلاك المواد' },
-    { key: 'compare-pl',  label: 'مقارنة الفترات' },
-    { key: 'snapshot',    label: '🔒 لقطة الإغلاق' },
+    { key: 'compare-pl',    label: 'مقارنة الفترات' },
+    { key: 'waste',             label: 'تقرير الهدر' },
+    { key: 'inv-valuation',     label: 'تقييم المخزون' },
+    { key: 'stocktake-variance', label: 'فروق الجرد' },
+    { key: 'snapshot',          label: '🔒 لقطة الإغلاق' },
   ]
 
   // فلترة التبويبات بحسب الصلاحيات — قبل تحميل الصلاحيات نعرض الكل
@@ -186,7 +193,7 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
       )}
 
       {tab === 'snapshot' && <SnapshotTab snapshot={snapshot} month={month} />}
-      {tab === 'pl'        && <PLReport        brand={brand} month={month} branch={branch} />}
+      {tab === 'pl'        && <PLReport        brand={brand} month={month} branch={branch} fcLow={fcLow} />}
       {tab === 'fc'        && <FCReport         brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
       {tab === 'breakeven' && <BreakevenReport  brand={brand} month={month} branch={branch} />}
       {tab === 'purchases' && <PurchasesReport     brand={brand} month={month} />}
@@ -202,7 +209,10 @@ export default function ReportsClient({ initialBranches, initialFcLow, initialFc
       {tab === 'dine'        && <DineReport           brand={brand} fcLow={fcLow} fcHigh={fcHigh} />}
       {tab === 'discounts'   && <DiscountsReport      brand={brand} month={month} branch={branch} />}
       {tab === 'consumption' && <ConsumptionReport    brand={brand} month={month} />}
-      {tab === 'compare-pl'  && <ComparePLReport      brand={brand} months={lastNMonths(12)} />}
+      {tab === 'compare-pl'    && <ComparePLReport      brand={brand} months={lastNMonths(12)} />}
+      {tab === 'waste'             && <WasteReport              brand={brand} month={month} branch={branch} />}
+      {tab === 'inv-valuation'     && <InvValuationReport        brand={brand} />}
+      {tab === 'stocktake-variance' && <StocktakeVarianceReport  brand={brand} />}
     </div>
   )
 }
@@ -234,7 +244,7 @@ async function loadPLMonthData(supabase: any, brand: string, m: string, branch: 
   return { revenue, totalRevWithVat, vat, materialCost, laborCost, overheadCost, deliveryCommission, commissionPct, totalCost, grossProfit, netProfit, ovByCategory }
 }
 
-function PLReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+function PLReport({ brand, month, branch = '', fcLow = FC_TARGET }: { brand: string; month: string; branch?: string; fcLow?: number }) {
   const [cur,  setCur]  = useState<any>(null)
   const [prev, setPrev] = useState<any>(null)
   const [ly,   setLy]   = useState<any>(null)
@@ -336,13 +346,13 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
 
   function renderRow(row: PLRow) {
     if (row.kind === 'sep') {
-      return <tr key={row.key}><td colSpan={colSpan} className="h-2 bg-slate-50" /></tr>
+      return <tr key={row.key}><td colSpan={colSpan} className="h-2 bg-gray-50" /></tr>
     }
 
     if (row.kind === 'section') {
       return (
         <tr key={row.key}>
-          <td colSpan={colSpan} className="bg-slate-800 px-5 py-2">
+          <td colSpan={colSpan} className="bg-gray-800 px-5 py-2">
             <span className="text-[10px] font-bold tracking-widest uppercase text-white">{row.label}</span>
           </td>
         </tr>
@@ -367,10 +377,10 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
     const isExp = row.isExp ?? false
 
     const fmtAmt = (val: number, expense: boolean) => {
-      if (val === 0) return <span className="text-slate-300 font-mono text-xs" dir="ltr">—</span>
+      if (val === 0) return <span className="text-gray-300 font-mono text-xs" dir="ltr">—</span>
       const abs = N(Math.abs(val))
       const txt = expense ? `(${abs})` : (val < 0 ? `(${abs})` : abs)
-      const cls = expense ? 'text-slate-600' : (val < 0 ? 'text-red-600' : 'text-slate-800')
+      const cls = expense ? 'text-gray-600' : (val < 0 ? 'text-red-600' : 'text-gray-800')
       return <span className={`font-mono text-xs ${cls}`} dir="ltr">{txt}</span>
     }
 
@@ -381,17 +391,17 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
     const good    = row.better === 'higher' ? up : !up
     const deltaEl = base > 0
       ? <span className={`text-[10px] font-semibold ${good ? 'text-emerald-600' : 'text-red-500'}`}>{up ? '▲' : '▼'} {Math.abs(diffPct).toFixed(1)}%</span>
-      : <span className="text-slate-200 text-[10px]">—</span>
+      : <span className="text-gray-200 text-[10px]">—</span>
 
     const pctEl = cur.revenue > 0
-      ? <span className="text-[10px] font-mono text-slate-400">{P(Math.abs(v), cur.revenue)}</span>
+      ? <span className="text-[10px] font-mono text-gray-400">{P(Math.abs(v), cur.revenue)}</span>
       : null
 
     if (row.kind === 'line') return (
-      <tr key={row.key} className="border-b border-slate-100 hover:bg-slate-50/40 transition-colors">
+      <tr key={row.key} className="border-b border-gray-100 hover:bg-gray-50/40 transition-colors">
         <td className={`py-2.5 ${row.indent ? 'pl-8 pr-4' : 'px-5'}`}>
-          <div className="text-xs text-slate-700">{row.label}</div>
-          {row.sublabel && <div className="text-[10px] text-slate-400 mt-0.5 font-mono">{row.sublabel}</div>}
+          <div className="text-xs text-gray-700">{row.label}</div>
+          {row.sublabel && <div className="text-[10px] text-gray-400 mt-0.5 font-mono">{row.sublabel}</div>}
         </td>
         <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
         <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
@@ -402,9 +412,9 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
     )
 
     if (row.kind === 'sub') return (
-      <tr key={row.key} className="bg-slate-100 border-t border-slate-300">
+      <tr key={row.key} className="bg-gray-100 border-t border-gray-300">
         <td className="px-5 py-2.5">
-          <span className="text-xs font-semibold text-slate-700">{row.label}</span>
+          <span className="text-xs font-semibold text-gray-700">{row.label}</span>
         </td>
         <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
         <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
@@ -415,27 +425,27 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
     )
 
     if (row.kind === 'total') return (
-      <tr key={row.key} className="bg-slate-200 border-t-2 border-slate-400">
+      <tr key={row.key} className="bg-gray-200 border-t-2 border-gray-400">
         <td className="px-5 py-3">
-          <span className="text-sm font-bold text-slate-800">{row.label}</span>
+          <span className="text-sm font-bold text-gray-800">{row.label}</span>
         </td>
         <td className="px-3 py-3 text-right">
-          <span className={`font-mono text-sm font-bold ${v < 0 ? 'text-red-700' : 'text-slate-800'}`} dir="ltr">
+          <span className={`font-mono text-sm font-bold ${v < 0 ? 'text-red-700' : 'text-gray-800'}`} dir="ltr">
             {v < 0 ? `(${N(Math.abs(v))})` : N(v)}
           </span>
         </td>
         <td className="px-3 py-3 text-right opacity-55">
-          <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-600' : 'text-slate-600'}`} dir="ltr">
+          <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
             {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
           </span>
         </td>
         {hasLy && <td className="px-3 py-3 text-right opacity-35">
-          <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-600' : 'text-slate-600'}`} dir="ltr">
+          <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
             {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
           </span>
         </td>}
         <td className="px-3 py-3 text-center">
-          <span className="text-xs font-mono font-bold text-slate-500">{P(Math.abs(v), cur.revenue)}</span>
+          <span className="text-xs font-mono font-bold text-gray-500">{P(Math.abs(v), cur.revenue)}</span>
         </td>
         <td className="px-3 py-3 text-center">{deltaEl}</td>
       </tr>
@@ -454,12 +464,12 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
             </span>
           </td>
           <td className="px-3 py-3 text-right opacity-70">
-            <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-500' : 'text-slate-600'}`} dir="ltr">
+            <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-500' : 'text-gray-600'}`} dir="ltr">
               {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
             </span>
           </td>
           {hasLy && <td className="px-3 py-3 text-right opacity-50">
-            <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-500' : 'text-slate-600'}`} dir="ltr">
+            <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-500' : 'text-gray-600'}`} dir="ltr">
               {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
             </span>
           </td>}
@@ -477,7 +487,7 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
   const kpiCards = [
     { en: 'Net Revenue',   ar: 'صافي الإيرادات',   v: cur.revenue,    pct: null,                        color: 'border-t-blue-500',    txt: 'text-blue-700' },
     { en: 'Gross Profit',  ar: 'مجمل الربح',        v: cur.grossProfit, pct: P(cur.grossProfit, cur.revenue), color: 'border-t-emerald-500', txt: 'text-emerald-700' },
-    { en: 'Food Cost %',   ar: 'نسبة تكلفة الغذاء', v: null,            pct: P(cur.materialCost, cur.revenue), color: 'border-t-orange-500', txt: cur.revenue > 0 && (cur.materialCost / cur.revenue) * 100 <= 32 ? 'text-emerald-600' : 'text-orange-600' },
+    { en: 'Food Cost %',   ar: 'نسبة تكلفة الغذاء', v: null,            pct: P(cur.materialCost, cur.revenue), color: 'border-t-orange-500', txt: cur.revenue > 0 && (cur.materialCost / cur.revenue) * 100 <= fcLow ? 'text-emerald-600' : 'text-orange-600' },
     { en: 'Net Profit',    ar: 'صافي الربح',         v: cur.netProfit,  pct: P(cur.netProfit, cur.revenue),   color: cur.netProfit >= 0 ? 'border-t-emerald-600' : 'border-t-red-500', txt: cur.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700' },
   ]
 
@@ -496,7 +506,7 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
   ].filter(d => d.value > 0)
 
   const kpiPerf = [
-    { label: 'Food Cost %',   val: cur.revenue > 0 ? (cur.materialCost / cur.revenue) * 100 : 0, target: 32, targetLbl: '≤ 32%', higherGood: false },
+    { label: 'Food Cost %',   val: cur.revenue > 0 ? (cur.materialCost / cur.revenue) * 100 : 0, target: fcLow, targetLbl: `≤ ${fcLow}%`, higherGood: false },
     { label: 'Prime Cost %',  val: cur.revenue > 0 ? (primeCost / cur.revenue) * 100 : 0,        target: 60, targetLbl: '≤ 60%', higherGood: false },
     { label: 'Gross Margin %',val: cur.revenue > 0 ? (cur.grossProfit / cur.revenue) * 100 : 0,  target: 65, targetLbl: '≥ 65%', higherGood: true  },
     { label: 'Net Margin %',  val: cur.revenue > 0 ? (cur.netProfit / cur.revenue) * 100 : 0,    target: 15, targetLbl: '≥ 15%', higherGood: true  },
@@ -505,18 +515,25 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
   return (
     <div className="space-y-5" id="pl-report-content">
       {/* ─── Formal Header Card ─── */}
-      <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-        <div className="bg-slate-800 px-6 py-4 flex items-start justify-between">
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="bg-gray-800 px-6 py-4 flex items-start justify-between">
           <div>
-            <div className="text-[9px] tracking-[0.25em] text-slate-400 uppercase font-medium">Income Statement / IFRS Presentation</div>
+            <div className="text-[9px] tracking-[0.25em] text-gray-400 uppercase font-medium">Income Statement / IFRS Presentation</div>
             <h2 className="text-lg font-bold text-white mt-1">قائمة الدخل</h2>
-            <div className="text-slate-400 text-xs mt-1">
+            <div className="text-gray-400 text-xs mt-1">
               للفترة المنتهية في {formatYearMonth(month)} · بالريال السعودي (SAR)
             </div>
           </div>
           <div className="flex items-center gap-2 mt-1">
             <button
-              onClick={() => exportPLReport({ month, brand, revenue: cur.revenue, materialCost: cur.materialCost, laborCost: cur.laborCost, overheadCost: cur.overheadCost, rows: [] }).catch(console.error)}
+              onClick={() => exportPLReport({
+                month, brand,
+                cur:  { revenue: cur.revenue,  materialCost: cur.materialCost,  laborCost: cur.laborCost,  overheadCost: cur.overheadCost,  deliveryCommission: cur.deliveryCommission,  netProfit: cur.netProfit,  grossProfit: cur.grossProfit,  ovByCategory: cur.ovByCategory ?? {} },
+                prev: { revenue: prev.revenue, materialCost: prev.materialCost, laborCost: prev.laborCost, overheadCost: prev.overheadCost, deliveryCommission: prev.deliveryCommission, netProfit: prev.netProfit, grossProfit: prev.grossProfit },
+                ly:   { revenue: ly.revenue,   materialCost: ly.materialCost,   laborCost: ly.laborCost,   overheadCost: ly.overheadCost,   deliveryCommission: ly.deliveryCommission,   netProfit: ly.netProfit,   grossProfit: ly.grossProfit },
+                prevLabel: formatYearMonth(prevMonth),
+                lyLabel:   formatYearMonth(lyMonth),
+              }).catch(console.error)}
               className="text-[11px] px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-colors"
             >⬇ Excel</button>
             <button
@@ -526,15 +543,15 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
           </div>
         </div>
         {/* KPI Ribbon */}
-        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-x-reverse divide-slate-100 border-t border-slate-100">
+        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-x-reverse divide-gray-100 border-t border-gray-100">
           {kpiCards.map((k, i) => (
             <div key={i} className={`px-5 py-4 border-t-4 ${k.color}`}>
-              <div className="text-[9px] text-slate-400 uppercase tracking-widest font-medium">{k.en}</div>
-              <div className="text-xs text-slate-500 mt-0.5">{k.ar}</div>
+              <div className="text-[9px] text-gray-400 uppercase tracking-widest font-medium">{k.en}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{k.ar}</div>
               <div className={`text-xl font-bold font-mono mt-1.5 ${k.txt}`}>
                 {k.v != null ? `${N(k.v)} ر.س` : k.pct}
               </div>
-              {k.pct && k.v != null && <div className="text-[10px] text-slate-400 font-mono mt-0.5">{k.pct} من الإيراد</div>}
+              {k.pct && k.v != null && <div className="text-[10px] text-gray-400 font-mono mt-0.5">{k.pct} من الإيراد</div>}
             </div>
           ))}
         </div>
@@ -542,22 +559,22 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
         {/* ─── Main P&L Table ─── */}
-        <div className="xl:col-span-2 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="xl:col-span-2 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
           {/* Column Headers */}
-          <div className="bg-slate-50 border-b border-slate-200 grid text-[10px] font-semibold uppercase tracking-wide"
+          <div className="bg-gray-50 border-b border-gray-200 grid text-[10px] font-semibold uppercase tracking-wide"
             style={{ gridTemplateColumns: hasLy ? '1fr 100px 88px 78px 55px 62px' : '1fr 110px 96px 55px 62px' }}>
-            <div className="px-5 py-2.5 text-slate-500">البند / Item</div>
+            <div className="px-5 py-2.5 text-gray-500">البند / Item</div>
             <div className="px-3 py-2.5 text-right text-blue-600">{formatYearMonth(month)}</div>
-            <div className="px-3 py-2.5 text-right text-slate-400">{formatYearMonth(prevMonth)}</div>
+            <div className="px-3 py-2.5 text-right text-gray-400">{formatYearMonth(prevMonth)}</div>
             {hasLy && <div className="px-3 py-2.5 text-right text-purple-400">{formatYearMonth(lyMonth)}</div>}
-            <div className="px-3 py-2.5 text-center text-slate-400">% إيراد</div>
-            <div className="px-3 py-2.5 text-center text-slate-400">تغيّر</div>
+            <div className="px-3 py-2.5 text-center text-gray-400">% إيراد</div>
+            <div className="px-3 py-2.5 text-center text-gray-400">تغيّر</div>
           </div>
           <table suppressHydrationWarning className="w-full">
             <tbody>{rows.map(row => renderRow(row))}</tbody>
           </table>
-          <div className="px-5 py-2.5 bg-slate-50 border-t border-slate-100">
-            <p className="text-[9px] text-slate-400 italic">
+          <div className="px-5 py-2.5 bg-gray-50 border-t border-gray-100">
+            <p className="text-[9px] text-gray-400 italic">
               * جميع الأرقام بالريال السعودي (SAR) · الإيرادات معروضة صافية من ضريبة القيمة المضافة · يُعدّ هذا التقرير للأغراض الإدارية الداخلية
             </p>
           </div>
@@ -566,8 +583,8 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
         {/* ─── Side Panels ─── */}
         <div className="space-y-4">
           {/* Grouped bar */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-            <p className="text-[10px] font-semibold text-slate-400 mb-3 uppercase tracking-wider">مقارنة الفترات</p>
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-gray-400 mb-3 uppercase tracking-wider">مقارنة الفترات</p>
             <ResponsiveContainer width="100%" height={190}>
               <BarChart data={barData} margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
@@ -582,8 +599,8 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
           </div>
 
           {/* Cost donut */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
-            <p className="text-[10px] font-semibold text-slate-400 mb-3 uppercase tracking-wider">هيكل التكاليف والربح</p>
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-gray-400 mb-3 uppercase tracking-wider">هيكل التكاليف والربح</p>
             <ResponsiveContainer width="100%" height={165}>
               <PieChart>
                 <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2} dataKey="value">
@@ -596,8 +613,8 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
           </div>
 
           {/* KPI Performance Scorecard */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm space-y-3">
-            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">تقييم الأداء التشغيلي</p>
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-3">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">تقييم الأداء التشغيلي</p>
             {kpiPerf.map(k => {
               const good = k.higherGood ? k.val >= k.target : k.val <= k.target
               const barW = k.higherGood
@@ -607,14 +624,14 @@ function PLReport({ brand, month, branch = '' }: { brand: string; month: string;
                 <div key={k.label}>
                   <div className="flex items-center justify-between mb-1">
                     <div>
-                      <span className="text-xs font-medium text-slate-700">{k.label}</span>
-                      <span className="text-[9px] text-slate-400 mr-1.5">(الهدف {k.targetLbl})</span>
+                      <span className="text-xs font-medium text-gray-700">{k.label}</span>
+                      <span className="text-[9px] text-gray-400 mr-1.5">(الهدف {k.targetLbl})</span>
                     </div>
                     <span className={`text-xs font-bold font-mono ${good ? 'text-emerald-600' : 'text-red-500'}`}>
                       {k.val.toFixed(1)}%
                     </span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                  <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
                     <div className={`h-full rounded-full ${good ? 'bg-emerald-400' : 'bg-red-400'}`} style={{ width: `${barW}%` }} />
                   </div>
                 </div>
@@ -763,16 +780,19 @@ function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: 
     const supabase = createClient()
     const { start: monthStart, end: monthEnd } = monthRange(month)
 
-    const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+    const [{ data: sales }, { data: labor }, { data: overhead }, { data: brandRow }] = await Promise.all([
       wb((supabase.from('daily_sales') as any).select('revenue, qty_sold, product_sku').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd), branch),
       (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
       (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+      (supabase.from('brands') as any).select('delivery_commission_pct').eq('id', brand).single(),
     ])
 
     const totalRevWithVat = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
     const totalQty        = (sales || []).reduce((s: number, r: any) => s + r.qty_sold, 0)
     const revenue         = totalRevWithVat / VAT_RATE
     const fixedCosts      = [...(labor || []), ...(overhead || [])].reduce((s: number, r: any) => s + r.amount, 0)
+    const commissionPct       = (brandRow as any)?.delivery_commission_pct ?? 0
+    const deliveryCommission  = revenue * commissionPct / 100
 
     const skus = [...new Set((sales || []).map((s: any) => s.product_sku))]
     let theoreticalMaterialCost = 0
@@ -789,7 +809,7 @@ function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: 
     }
 
     const avgRevenuePerCover = totalQty > 0 ? revenue / totalQty : 0
-    const avgVarCostPerCover = totalQty > 0 ? theoreticalMaterialCost / totalQty : 0
+    const avgVarCostPerCover = totalQty > 0 ? (theoreticalMaterialCost + deliveryCommission) / totalQty : 0
     const contributionMargin = avgRevenuePerCover - avgVarCostPerCover
     const breakevenCovers    = contributionMargin > 0 ? fixedCosts / contributionMargin : 0
     const daysInMonth        = parseInt(monthEnd.slice(-2), 10)
@@ -801,6 +821,7 @@ function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: 
 
     setData({
       revenue, totalQty, fixedCosts, theoreticalMaterialCost,
+      deliveryCommission, commissionPct,
       avgRevenuePerCover, avgVarCostPerCover, contributionMargin,
       breakevenCovers, breakevenPerDay, cmRatio, breakevenRevenue,
       currentFcPct, safetyMargin,
@@ -833,16 +854,17 @@ function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: 
         <div className="bg-white border border-gray-200 rounded-xl p-5">
           <SectionTitle>معادلة نقطة التعادل</SectionTitle>
           <div className="space-y-3 text-sm">
-            {[
+            {([
               { label: 'متوسط الإيراد/وجبة', value: `${d.avgRevenuePerCover.toFixed(2)} ر.س`, color: 'text-blue-700' },
               { label: 'متوسط التكلفة المتغيرة/وجبة', value: `${d.avgVarCostPerCover.toFixed(2)} ر.س`, color: 'text-red-600' },
+              ...(d.commissionPct > 0 ? [{ label: `منها — عمولات التوصيل (${d.commissionPct}%)/وجبة`, value: `${(d.deliveryCommission / Math.max(d.totalQty, 1)).toFixed(2)} ر.س`, color: 'text-amber-600' }] : []),
               { label: 'هامش المساهمة/وجبة', value: `${d.contributionMargin.toFixed(2)} ر.س`, color: 'text-emerald-700', bold: true },
               { label: 'إجمالي التكاليف الثابتة', value: `${d.fixedCosts.toFixed(2)} ر.س`, color: 'text-gray-700' },
               { label: 'وجبات التعادل (شهري)', value: `${Math.ceil(d.breakevenCovers)} وجبة`, color: 'text-amber-700', bold: true },
               { label: 'وجبات التعادل (يومي)', value: `${Math.ceil(d.breakevenPerDay)} وجبة`, color: 'text-amber-700', bold: true },
               { label: 'إيراد التعادل', value: `${d.breakevenRevenue.toFixed(0)} ر.س`, color: 'text-gray-700' },
               { label: 'الإيراد الفعلي', value: `${d.revenue.toFixed(0)} ر.س`, color: 'text-blue-700' },
-            ].map((row, i) => (
+            ] as { label: string; value: string; color: string; bold?: boolean }[]).map((row, i) => (
               <div key={i} className="flex justify-between items-center py-2 border-b border-gray-100">
                 <span className="text-gray-600">{row.label}</span>
                 <span className={`font-mono font-${row.bold ? 'bold' : 'medium'} ${row.color}`}>{row.value}</span>
@@ -880,6 +902,7 @@ function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: 
 
 // ── 4. Purchases Analysis ─────────────────────────────────────────
 function PurchasesReport({ brand, month }: { brand: string; month: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
@@ -929,9 +952,41 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
   if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
   if (!data) return <div className="py-16 text-center text-gray-400">لا توجد مشتريات لهذا الشهر</div>
 
+  async function exportExcelPurchases() {
+    startLoading('جارٍ تصدير تقرير المشتريات...')
+    try {
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+      const { data: rows } = await (supabase.from('purchases') as any)
+        .select('purchase_date, supplier_name, ing_name, ing_sku, qty, unit, total_price, unit_cost')
+        .eq('brand_id', brand).gte('purchase_date', start).lte('purchase_date', end)
+        .order('purchase_date')
+      if (!rows?.length) return
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet((rows as any[]).map(r => ({
+        'التاريخ': r.purchase_date, 'المورد': r.supplier_name,
+        'المادة': r.ing_name, 'SKU': r.ing_sku,
+        'الكمية': r.qty, 'الوحدة': r.unit,
+        'الإجمالي (ر.س)': r.total_price, 'تكلفة/وحدة': r.unit_cost,
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 14 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 12 }]
+      X.utils.book_append_sheet(wb, ws, 'المشتريات')
+      X.writeFile(wb, `تحليل_المشتريات_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
   return (
     <div className="space-y-5">
-      <KpiCard label="إجمالي المشتريات" value={`${data.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س`} color="text-red-600" sub={`${formatYearMonth(month)}`} />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <KpiCard label="إجمالي المشتريات" value={`${data.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س`} color="text-red-600" sub={`${formatYearMonth(month)}`} />
+        <button onClick={exportExcelPurchases}
+          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium self-start mt-1">
+          ⬇ Excel
+        </button>
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <div className="bg-white border border-gray-200 rounded-xl p-5">
@@ -1004,6 +1059,7 @@ function PurchasesReport({ brand, month }: { brand: string; month: string }) {
 
 // ── 5. Sales Analysis ─────────────────────────────────────────────
 function SalesReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
@@ -1051,13 +1107,45 @@ function SalesReport({ brand, month, branch = '' }: { brand: string; month: stri
   if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
   if (!data) return <div className="py-16 text-center text-gray-400">لا توجد مبيعات لهذا الشهر</div>
 
+  async function exportExcelSales() {
+    startLoading('جارٍ تصدير تقرير المبيعات...')
+    try {
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+      const { data: rows } = await wb(
+        (supabase.from('daily_sales') as any)
+          .select('sale_date, product_sku, product_name, qty_sold, revenue, cost')
+          .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end)
+          .order('sale_date'), branch)
+      if (!rows?.length) return
+      const X = await import('xlsx')
+      const wbk = X.utils.book_new()
+      const ws = X.utils.json_to_sheet((rows as any[]).map(r => ({
+        'التاريخ': r.sale_date, 'SKU المنتج': r.product_sku, 'اسم المنتج': r.product_name,
+        'الكمية المباعة': r.qty_sold, 'الإيراد (شامل VAT)': r.revenue,
+        'الإيراد (قبل VAT)': (r.revenue / VAT_RATE).toFixed(2), 'التكلفة': r.cost ?? 0,
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 12 }]
+      X.utils.book_append_sheet(wbk, ws, 'المبيعات')
+      X.writeFile(wbk, `تحليل_المبيعات_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <KpiCard label="الإيراد (قبل VAT)" value={`${data.totalRev.toFixed(0)} ر.س`} color="text-green-700" />
-        <KpiCard label="الإيراد (شامل VAT)" value={`${data.totalRevWithVat.toFixed(0)} ر.س`} color="text-gray-700" />
-        <KpiCard label="إجمالي الوجبات" value={`${data.totalQty} وجبة`} color="text-blue-700" />
-        <KpiCard label="متوسط الوجبة" value={`${data.avgPerCover.toFixed(2)} ر.س`} color="text-indigo-700" />
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 flex-1">
+          <KpiCard label="الإيراد (قبل VAT)" value={`${data.totalRev.toFixed(0)} ر.س`} color="text-green-700" />
+          <KpiCard label="الإيراد (شامل VAT)" value={`${data.totalRevWithVat.toFixed(0)} ر.س`} color="text-gray-700" />
+          <KpiCard label="إجمالي الوجبات" value={`${data.totalQty} وجبة`} color="text-blue-700" />
+          <KpiCard label="متوسط الوجبة" value={`${data.avgPerCover.toFixed(2)} ر.س`} color="text-indigo-700" />
+        </div>
+        <button onClick={exportExcelSales}
+          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium self-start mt-1">
+          ⬇ Excel
+        </button>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-5">
@@ -1648,10 +1736,22 @@ function ReversePricingTool({ brand, fcLow = 35, fcHigh = 45 }: { brand: string;
     setApplying(true); setApplyMsg(null)
     const supabase = createClient()
     const newSellWithVat = Math.round(suggestedPriceWithVat * 100) / 100
-    const { error } = await (supabase.from('products') as any)
-      .update({ price: newSellWithVat })
-      .eq('brand_id', brand).eq('sku', selected.sku)
-    if (error) { setApplyMsg({ ok: false, text: error.message }); setApplying(false); return }
+    const newSellExVat   = newSellWithVat / VAT_RATE
+    const newFcPct       = newSellExVat > 0 ? Math.round((costPerPortion / newSellExVat) * 10000) / 100 : 0
+    const newMargin      = Math.round((newSellExVat - costPerPortion) * 10000) / 10000
+
+    const [{ error: prodErr }, { error: recipeErr }] = await Promise.all([
+      (supabase.from('products') as any)
+        .update({ price: newSellWithVat })
+        .eq('brand_id', brand).eq('sku', selected.sku),
+      (supabase.from('recipes') as any)
+        .update({ sell_price: newSellWithVat, food_cost_pct: newFcPct, margin: newMargin })
+        .eq('brand_id', brand).eq('sku', selected.sku).eq('is_active', true),
+    ])
+    if (prodErr || recipeErr) {
+      setApplyMsg({ ok: false, text: (prodErr || recipeErr)!.message })
+      setApplying(false); return
+    }
     setApplyMsg({ ok: true, text: `تم تحديث سعر "${selected.product_name}" إلى ${newSellWithVat.toFixed(2)} ر.س ✓` })
     setApplying(false)
   }
@@ -1806,10 +1906,9 @@ function TrendsReport({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow
       const rangeStart = monthRange(months[months.length - 1]).start
       const rangeEnd   = monthRange(months[0]).end
 
-      // 4 queries total instead of nMonths × 4
-      const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }] = await Promise.all([
-        (supabase.from('daily_sales') as any).select('sale_date, revenue').eq('brand_id', brand).gte('sale_date', rangeStart).lte('sale_date', rangeEnd).limit(10000),
-        (supabase.from('purchases') as any).select('purchase_date, total_price').eq('brand_id', brand).gte('purchase_date', rangeStart).lte('purchase_date', rangeEnd).limit(10000),
+      // 3 queries: use daily_sales.cost as COGS (not purchases) for accurate FC%
+      const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+        (supabase.from('daily_sales') as any).select('sale_date, revenue, cost').eq('brand_id', brand).gte('sale_date', rangeStart).lte('sale_date', rangeEnd).limit(10000),
         (supabase.from('labor_costs') as any).select('month, amount').eq('brand_id', brand).in('month', months),
         (supabase.from('overhead_costs') as any).select('month, amount').eq('brand_id', brand).in('month', months),
       ])
@@ -1821,10 +1920,11 @@ function TrendsReport({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow
       const labMap  = new Map<string, number>()
       const ovhMap  = new Map<string, number>()
 
-      for (const r of (sales || []) as any[])
-        revMap.set(r.sale_date.slice(0, 7), (revMap.get(r.sale_date.slice(0, 7)) ?? 0) + r.revenue)
-      for (const r of (purchases || []) as any[])
-        matMap.set(r.purchase_date.slice(0, 7), (matMap.get(r.purchase_date.slice(0, 7)) ?? 0) + r.total_price)
+      for (const r of (sales || []) as any[]) {
+        const m = r.sale_date.slice(0, 7)
+        revMap.set(m, (revMap.get(m) ?? 0) + (r.revenue ?? 0))
+        matMap.set(m, (matMap.get(m) ?? 0) + (r.cost ?? 0))
+      }
       for (const r of (labor || []) as any[])
         labMap.set(r.month, (labMap.get(r.month) ?? 0) + r.amount)
       for (const r of (overhead || []) as any[])
@@ -1971,14 +2071,13 @@ function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcL
       setBrandList(allBrands)
 
       const results = await Promise.all(allBrands.map(async (b) => {
-        const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }] = await Promise.all([
-          (supabase.from('daily_sales') as any).select('revenue').eq('brand_id', b.id).gte('sale_date', start).lte('sale_date', end),
-          (supabase.from('purchases') as any).select('total_price').eq('brand_id', b.id).gte('purchase_date', start).lte('purchase_date', end),
+        const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+          (supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', b.id).gte('sale_date', start).lte('sale_date', end),
           (supabase.from('labor_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
           (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
         ])
-        const rev = (sales     || []).reduce((s: number, r: any) => s + r.revenue, 0) / VAT_RATE
-        const mat = (purchases || []).reduce((s: number, r: any) => s + r.total_price, 0)
+        const rev = (sales || []).reduce((s: number, r: any) => s + (r.revenue ?? 0), 0) / VAT_RATE
+        const mat = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
         const lab = (labor     || []).reduce((s: number, r: any) => s + r.amount, 0)
         const ovh = (overhead  || []).reduce((s: number, r: any) => s + r.amount, 0)
         return [b.id, {
@@ -2879,6 +2978,7 @@ function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
   const [rows, setRows]   = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch]   = useState('')
+  const [capped, setCapped]   = useState(false)
 
   useEffect(() => {
     const load = async () => {
@@ -2895,7 +2995,7 @@ function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
         (supabase.from('stock_movements') as any)
           .select('ing_sku, ing_name, qty, movement_type')
           .eq('brand_id', brand).gte('created_at', start + 'T00:00:00').lte('created_at', end + 'T23:59:59')
-          .in('movement_type', ['out', 'waste']),
+          .in('movement_type', ['out', 'waste']).limit(5000),
         // تكلفة الوحدة الحالية
         (supabase.from('ingredients') as any).select('sku, name, unit, cost').eq('brand_id', brand),
       ])
@@ -2935,6 +3035,7 @@ function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
         })
       }
       result.sort((a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance))
+      setCapped((consumed?.length ?? 0) >= 5000)
       setRows(result)
       setLoading(false)
     }
@@ -2954,8 +3055,31 @@ function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
           <h2 className="text-base font-semibold text-gray-900">استهلاك المواد الخام — {formatYearMonth(month)}</h2>
           <p className="text-xs text-gray-500 mt-0.5">مقارنة المشتريات بالحركات الصادرة من المخزون</p>
         </div>
-        <input type="text" placeholder="بحث بالمادة..." value={search} onChange={e => setSearch(e.target.value)}
-          className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-40 focus:outline-none focus:border-blue-500 bg-white" />
+        {capped && (
+          <div className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1.5 rounded-lg">
+            ⚠ عدد الحركات وصل للحد الأقصى (5000 سجل) — قد لا يكون الشهر مكتملاً
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث بالمادة..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-40 focus:outline-none focus:border-blue-500 bg-white" />
+          <button onClick={async () => {
+            const X = await import('xlsx')
+            const wbk = X.utils.book_new()
+            const ws = X.utils.json_to_sheet(rows.map((r: any) => ({
+              'SKU': r.sku, 'المادة': r.name, 'الوحدة': r.unit,
+              'كمية مشتراة': r.purQty, 'قيمة مشتريات (ر.س)': r.purValue.toFixed(2),
+              'كمية مصروفة': r.conQty, 'قيمة صرف (ر.س)': r.conValue.toFixed(2),
+              'الرصيد': r.balance.toFixed(3),
+            })))
+            ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 16 }, { wch: 10 }]
+            X.utils.book_append_sheet(wbk, ws, 'الاستهلاك')
+            X.writeFile(wbk, `استهلاك_المواد_${month}_${brand}.xlsx`)
+          }}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-3 gap-4">
@@ -3025,16 +3149,15 @@ interface PLData {
 
 async function loadPLForMonth(supabase: any, brand: string, m: string): Promise<PLData> {
   const { start, end } = monthRange(m)
-  const [{ data: sales }, { data: purchases }, { data: labor }, { data: overhead }] = await Promise.all([
-    (supabase.from('daily_sales') as any).select('revenue').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end),
-    (supabase.from('purchases') as any).select('total_price').eq('brand_id', brand).gte('purchase_date', start).lte('purchase_date', end),
+  const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+    (supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end),
     (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
     (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
   ])
   const totalRevVat = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
   const rev       = totalRevVat / VAT_RATE
   const vat       = totalRevVat - rev
-  const mat       = (purchases || []).reduce((s: number, r: any) => s + r.total_price, 0)
+  const mat       = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
   const laborAmt  = (labor || []).reduce((s: number, r: any) => s + r.amount, 0)
   const ovhAmt    = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
   const gross     = rev - mat
@@ -3310,6 +3433,523 @@ function SnapshotTab({ snapshot, month }: { snapshot: Record<string, any> | null
             </table>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── 19. Waste Report ───────────────────────────────────────────────
+function WasteReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [rows, setRows]       = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+
+      const q = (supabase.from('stock_movements') as any)
+        .select('ing_sku, ing_name, qty, unit, movement_type, created_at, notes, branch_name, value')
+        .eq('brand_id', brand)
+        .eq('movement_type', 'waste')
+        .gte('created_at', start + 'T00:00:00')
+        .lte('created_at', end + 'T23:59:59')
+        .order('created_at', { ascending: false })
+
+      const { data: movements } = branch ? q.eq('branch_name', branch) : q
+
+      const { data: ings } = await (supabase.from('ingredients') as any)
+        .select('sku, cost').eq('brand_id', brand)
+
+      const costMap = new Map<string, number>()
+      for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost ?? 0)
+
+      setRows(((movements || []) as any[]).map(r => ({
+        ...r,
+        value: r.value != null ? r.value : r.qty * (costMap.get(r.ing_sku) ?? 0),
+        date: r.created_at?.slice(0, 10) ?? '',
+      })))
+      setLoading(false)
+    }
+    load()
+  }, [brand, month, branch])
+
+  const filtered   = search ? rows.filter(r => r.ing_name?.toLowerCase().includes(search.toLowerCase())) : rows
+  const totalQty   = rows.reduce((s, r) => s + r.qty, 0)
+  const totalValue = rows.reduce((s, r) => s + r.value, 0)
+
+  const topItems = Object.values(
+    rows.reduce((acc: any, r: any) => {
+      if (!acc[r.ing_sku]) acc[r.ing_sku] = { name: r.ing_name, qty: 0, value: 0 }
+      acc[r.ing_sku].qty   += r.qty
+      acc[r.ing_sku].value += r.value
+      return acc
+    }, {})
+  ).sort((a: any, b: any) => b.value - a.value).slice(0, 5) as any[]
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقرير الهدر...')
+    try {
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'التاريخ': r.date, 'المادة': r.ing_name, 'الكمية': r.qty, 'الوحدة': r.unit,
+        'القيمة (ر.س)': r.value.toFixed(4), 'الفرع': r.branch_name ?? '', 'ملاحظات': r.notes ?? '',
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 20 }]
+      X.utils.book_append_sheet(wb, ws, 'الهدر والفاقد')
+      X.writeFile(wb, `تقرير_الهدر_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقرير الهدر والفاقد — {formatYearMonth(month)}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{rows.length} حركة هدر مسجّلة</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث بالمادة..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-40 focus:outline-none focus:border-blue-500 bg-white" />
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <KpiCard label="إجمالي قيمة الهدر" value={`${totalValue.toFixed(2)} ر.س`} color="text-red-600" sub={formatYearMonth(month)} />
+        <KpiCard label="عدد سجلات الهدر" value={String(rows.length)} color="text-gray-700" />
+        <KpiCard label="أعلى مادة هدراً" value={topItems[0]?.name ?? '—'} sub={topItems[0] ? `${topItems[0].value.toFixed(2)} ر.س` : undefined} color="text-amber-700" />
+      </div>
+
+      {topItems.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>أعلى 5 مواد هدراً (قيمة)</SectionTitle>
+          <div className="space-y-2">
+            {topItems.map((item: any) => (
+              <div key={item.name} className="flex items-center gap-3">
+                <div className="text-xs text-gray-700 w-32 truncate">{item.name}</div>
+                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-400 rounded-full" style={{ width: `${Math.min(totalValue > 0 ? (item.value / totalValue) * 100 : 0, 100)}%` }} />
+                </div>
+                <div className="text-xs font-mono text-red-600 w-24 text-left">{item.value.toFixed(2)} ر.س</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد سجلات هدر لهذا الشهر</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">التاريخ</th>
+                  <th className="text-right px-4 py-3 font-medium">المادة</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة</th>
+                  <th className="text-right px-4 py-3 font-medium">الفرع</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any, i: number) => (
+                  <tr key={i} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5 text-xs font-mono text-gray-500">{r.date}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{r.ing_name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.ing_sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-red-600 text-xs font-semibold">{r.qty.toFixed(3)} {r.unit}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-red-700 text-xs font-semibold">{r.value > 0 ? `${r.value.toFixed(2)} ر.س` : '—'}</td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500">{r.branch_name ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={2} className="px-4 py-3 text-xs font-semibold text-gray-700">الإجمالي</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-red-600 text-xs">{totalQty.toFixed(3)}</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-red-700 text-xs">{totalValue.toFixed(2)} ر.س</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 20. Live Inventory Valuation ───────────────────────────────────
+function InvValuationReport({ brand }: { brand: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [rows, setRows]       = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+  const [catFilter, setCatFilter] = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+
+      const [{ data: stocks }, { data: ings }] = await Promise.all([
+        (supabase.from('stock_items') as any)
+          .select('ing_sku, ing_name, current_qty, unit, updated_at')
+          .eq('brand_id', brand)
+          .gt('current_qty', 0),
+        (supabase.from('ingredients') as any)
+          .select('sku, cost, category')
+          .eq('brand_id', brand),
+      ])
+
+      const ingMap = new Map<string, { cost: number; category: string }>()
+      for (const i of (ings || []) as any[]) ingMap.set(i.sku, { cost: i.cost ?? 0, category: i.category ?? 'غير محدد' })
+
+      const result = ((stocks || []) as any[]).map(s => {
+        const ing      = ingMap.get(s.ing_sku)
+        const cost     = ing?.cost ?? 0
+        const value    = s.current_qty * cost
+        const lastMove = s.updated_at?.slice(0, 10) ?? ''
+        const daysSince = lastMove ? Math.floor((Date.now() - new Date(lastMove).getTime()) / 86400000) : 999
+        return {
+          sku: s.ing_sku, name: s.ing_name, unit: s.unit,
+          qty: s.current_qty, cost, value,
+          category: ing?.category ?? 'غير محدد',
+          isStale: daysSince > 30, daysSince,
+        }
+      }).sort((a, b) => b.value - a.value)
+
+      setRows(result)
+      setLoading(false)
+    }
+    load()
+  }, [brand])
+
+  const categories = [...new Set(rows.map(r => r.category))].sort()
+  const filtered   = rows.filter(r => {
+    if (catFilter && r.category !== catFilter) return false
+    if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
+  const totalValue = filtered.reduce((s, r) => s + r.value, 0)
+  const staleItems = rows.filter(r => r.isStale)
+  const staleValue = staleItems.reduce((s, r) => s + r.value, 0)
+
+  const catData = Object.entries(
+    rows.reduce((acc: any, r: any) => { acc[r.category] = (acc[r.category] ?? 0) + r.value; return acc }, {})
+  ).map(([name, value]) => ({ name, value: value as number })).sort((a, b) => b.value - a.value)
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقييم المخزون...')
+    try {
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'SKU': r.sku, 'المادة': r.name, 'الفئة': r.category, 'الوحدة': r.unit,
+        'الكمية الحالية': r.qty, 'التكلفة/وحدة (ر.س)': r.cost.toFixed(4),
+        'القيمة الإجمالية (ر.س)': r.value.toFixed(2), 'راكد +30 يوم': r.isStale ? 'نعم' : '',
+      })))
+      ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 12 }]
+      X.utils.book_append_sheet(wb, ws, 'تقييم المخزون')
+      X.writeFile(wb, `تقييم_المخزون_${new Date().toLocaleDateString('en-CA')}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقييم المخزون الحي</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{rows.length} صنف · {new Date().toLocaleDateString('ar-SA')}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-36 focus:outline-none focus:border-blue-500 bg-white" />
+          <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-blue-500 bg-white">
+            <option value="">كل الفئات</option>
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <KpiCard label="إجمالي قيمة المخزون" value={`${rows.reduce((s, r) => s + r.value, 0).toFixed(2)} ر.س`} color="text-blue-700" />
+        <KpiCard label="أصناف راكدة (+30 يوم)" value={String(staleItems.length)} color={staleItems.length > 0 ? 'text-amber-700' : 'text-green-700'} sub={staleValue > 0 ? `${staleValue.toFixed(2)} ر.س` : undefined} />
+        <KpiCard label="أصناف بمخزون" value={String(rows.length)} color="text-gray-700" />
+      </div>
+
+      {catData.length > 1 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>توزيع القيمة بالفئة</SectionTitle>
+          <div className="space-y-2">
+            {catData.map(c => (
+              <div key={c.name} className="flex items-center gap-3">
+                <div className="text-xs text-gray-700 w-28 truncate">{c.name}</div>
+                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full" style={{ width: `${catData[0].value > 0 ? Math.min((c.value / catData[0].value) * 100, 100) : 0}%` }} />
+                </div>
+                <div className="text-xs font-mono text-blue-700 w-24 text-left">{c.value.toFixed(0)} ر.س</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {staleItems.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-semibold text-amber-800">{staleItems.length} صنف راكد (+30 يوم بلا حركة) — قيمة: {staleValue.toFixed(2)} ر.س</p>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {staleItems.slice(0, 8).map(i => (
+              <span key={i.sku} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{i.name}</span>
+            ))}
+            {staleItems.length > 8 && <span className="text-xs text-amber-500">+{staleItems.length - 8} أخرى</span>}
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">المادة</th>
+                  <th className="text-right px-4 py-3 font-medium">الفئة</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-3 font-medium">التكلفة/وحدة</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة</th>
+                  <th className="text-center px-4 py-3 font-medium">الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any, i: number) => (
+                  <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{r.name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.sku} · {r.unit}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500">{r.category}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toFixed(3)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600 text-xs">{r.cost.toFixed(4)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono font-semibold text-blue-700 text-xs">{r.value.toFixed(2)} ر.س</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {r.isStale
+                        ? <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">راكد {r.daysSince}ي</span>
+                        : <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">نشط</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={4} className="px-4 py-3 text-xs font-semibold text-gray-700">الإجمالي ({filtered.length} صنف)</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-blue-700 text-xs">{totalValue.toFixed(2)} ر.س</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 20. Stocktake Variance Report ────────────────────────────────
+function StocktakeVarianceReport({ brand }: { brand: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [sessions, setSessions]           = useState<any[]>([])
+  const [selectedId, setSelectedId]       = useState<string | null>(null)
+  const [items, setItems]                 = useState<any[]>([])
+  const [loadingSessions, setLoadingSess] = useState(true)
+  const [loadingItems, setLoadingItems]   = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      const supabase = createClient()
+      const { data } = await (supabase.from('stocktake_sessions') as any)
+        .select('id, session_date, notes, status, finalized_at')
+        .eq('brand_id', brand)
+        .in('status', ['finalized', 'approved'])
+        .order('session_date', { ascending: false })
+      const list = data ?? []
+      setSessions(list)
+      if (list.length > 0) setSelectedId(list[0].id)
+      setLoadingSess(false)
+    }
+    load()
+  }, [brand])
+
+  useEffect(() => {
+    if (!selectedId) return
+    const load = async () => {
+      setLoadingItems(true)
+      const supabase = createClient()
+      const { data } = await (supabase.from('stocktake_items') as any)
+        .select('id, ing_sku, ing_name, item_type, theoretical_qty, actual_qty, unit_cost, unit')
+        .eq('session_id', selectedId)
+        .order('ing_name')
+      setItems(data ?? [])
+      setLoadingItems(false)
+    }
+    load()
+  }, [selectedId])
+
+  const rows = items.map(i => {
+    const variance       = (i.actual_qty ?? 0) - (i.theoretical_qty ?? 0)
+    const variance_value = variance * (i.unit_cost ?? 0)
+    return { ...i, variance, variance_value }
+  })
+
+  const positiveValue  = rows.filter(r => r.variance > 0.001).reduce((s, r) => s + r.variance_value, 0)
+  const negativeValue  = rows.filter(r => r.variance < -0.001).reduce((s, r) => s + r.variance_value, 0)
+  const netValue       = positiveValue + negativeValue
+  const withVariance   = rows.filter(r => Math.abs(r.variance) >= 0.001).length
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقرير فروق الجرد...')
+    try {
+      const X   = await import('xlsx')
+      const wb2 = X.utils.book_new()
+      const session = sessions.find(s => s.id === selectedId)
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'المادة/المنتج':    r.ing_name,
+        'الكمية النظرية':   r.theoretical_qty?.toFixed(3) ?? '0',
+        'الكمية الفعلية':   r.actual_qty?.toFixed(3) ?? '0',
+        'الفرق (كمية)':     r.variance.toFixed(3),
+        'التكلفة/وحدة':     (r.unit_cost ?? 0).toFixed(4),
+        'قيمة الفرق (ر.س)': r.variance_value.toFixed(2),
+      })))
+      ws['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }]
+      X.utils.book_append_sheet(wb2, ws, 'فروق الجرد')
+      X.writeFile(wb2, `فروق_الجرد_${session?.session_date ?? ''}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loadingSessions) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقرير فروق الجرد الدوري</h2>
+          <p className="text-xs text-gray-500 mt-0.5">مقارنة الكميات الفعلية بالنظرية لجلسات الجرد المُنهاة</p>
+        </div>
+        {selectedId && (
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        )}
+      </div>
+
+      {sessions.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+          لا توجد جلسات جرد مُكتملة بعد — أنهِ جلسة جرد أولاً من صفحة المخزون
+        </div>
+      ) : (
+        <>
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <label className="text-sm font-medium text-gray-700 block mb-2">اختر جلسة جرد</label>
+            <select value={selectedId ?? ''} onChange={e => setSelectedId(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-xs focus:outline-none focus:border-blue-500 bg-white">
+              {sessions.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.session_date} — {s.status === 'approved' ? 'مُعتمد' : 'مُنهى'}{s.notes ? ` · ${s.notes}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {loadingItems ? (
+            <div className="py-8 text-center text-gray-400">جارٍ تحميل بنود الجلسة...</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <KpiCard label="فروق موجبة (زيادة)" value={`${positiveValue.toFixed(2)} ر.س`} color="text-emerald-600"
+                  sub={`${rows.filter(r => r.variance > 0.001).length} صنف`} />
+                <KpiCard label="فروق سالبة (نقص)" value={`${Math.abs(negativeValue).toFixed(2)} ر.س`} color="text-red-600"
+                  sub={`${rows.filter(r => r.variance < -0.001).length} صنف`} />
+                <KpiCard label="صافي الفرق" value={`${netValue >= 0 ? '+' : ''}${netValue.toFixed(2)} ر.س`}
+                  color={netValue >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+                <KpiCard label="أصناف بفرق" value={`${withVariance} صنف`} color="text-gray-700"
+                  sub={`من ${rows.length} إجمالي`} />
+              </div>
+
+              {rows.length === 0 ? (
+                <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بنود في هذه الجلسة</div>
+              ) : (
+                <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table suppressHydrationWarning className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                          <th className="text-right px-4 py-3 font-medium">المادة/المنتج</th>
+                          <th className="text-center px-4 py-3 font-medium">نظري</th>
+                          <th className="text-center px-4 py-3 font-medium">فعلي</th>
+                          <th className="text-center px-4 py-3 font-medium">الفرق</th>
+                          <th className="text-center px-4 py-3 font-medium">قيمة الفرق</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r: any, i: number) => {
+                          const hasVar = Math.abs(r.variance) >= 0.001
+                          const isPos  = r.variance > 0.001
+                          return (
+                            <tr key={i} className={`border-b border-gray-100 last:border-0 ${hasVar ? (isPos ? 'bg-green-50/30' : 'bg-red-50/30') : ''}`}>
+                              <td className="px-4 py-2.5">
+                                <div className="font-medium text-gray-900 text-xs">{r.ing_name}</div>
+                                <div className="text-[10px] text-gray-400 font-mono">{r.ing_sku}</div>
+                              </td>
+                              <td className="px-4 py-2.5 text-center font-mono text-gray-600 text-xs">{(r.theoretical_qty ?? 0).toFixed(3)}</td>
+                              <td className="px-4 py-2.5 text-center font-mono text-gray-900 text-xs font-medium">{(r.actual_qty ?? 0).toFixed(3)}</td>
+                              <td className={`px-4 py-2.5 text-center font-mono text-xs font-semibold ${!hasVar ? 'text-gray-400' : isPos ? 'text-emerald-600' : 'text-red-600'}`}>
+                                {hasVar ? `${isPos ? '+' : ''}${r.variance.toFixed(3)}` : '—'}
+                              </td>
+                              <td className={`px-4 py-2.5 text-center font-mono text-xs font-semibold ${!hasVar ? 'text-gray-400' : isPos ? 'text-emerald-600' : 'text-red-600'}`}>
+                                {hasVar ? `${isPos ? '+' : ''}${r.variance_value.toFixed(2)} ر.س` : '—'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
       )}
     </div>
   )

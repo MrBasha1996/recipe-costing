@@ -29,7 +29,7 @@ export default async function DashboardPage({ params }: { params: Promise<{ bran
     { data: recipesFC },
   ] = await Promise.all([
     (supabase.from('brands') as any).select('fc_target_low, fc_target_high').eq('id', brand).single(),
-    (supabase.from('recipes') as any).select('*').eq('brand_id', brand as string).order('food_cost_pct', { ascending: false }),
+    (supabase.from('recipes') as any).select('id, sku, product_name, food_cost_pct, total_cost, sell_price, is_active, is_approved, margin, yield_portions, is_semi, app_price, margin_app, saved_at').eq('brand_id', brand as string).order('food_cost_pct', { ascending: false }),
     (supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue').eq('brand_id', brand).eq('sale_date', yesterdayStr),
     (supabase.from('daily_sales') as any).select('qty_sold, revenue').eq('brand_id', brand).eq('sale_date', lastWkSameDay),
     (supabase.from('daily_sales') as any).select('product_sku, revenue').eq('brand_id', brand).gte('sale_date', weekAgoStr).lte('sale_date', yesterdayStr),
