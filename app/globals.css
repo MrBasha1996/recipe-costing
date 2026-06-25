@@ -1,0 +1,148 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700&display=swap');
+
+:root {
+  --color-primary:   #3b82f6;
+  --color-success:   #10b981;
+  --color-secondary: #8b5cf6;
+  --color-warning:   #f59e0b;
+  --color-danger:    #ef4444;
+  --color-bg:        #fafbfc;
+  --color-surface:   #ffffff;
+  --color-border:    #e5e7eb;
+  --color-text:      #1a202c;
+  --color-muted:     #6b7280;
+  --sidebar-width:   260px;
+  --font-main:       'Cairo', 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+
+  /* Brand theme tokens (default = ti) */
+  --brand-sidebar-bg:      #0e1f2e;
+  --brand-sidebar-border:  #1a3a4a;
+  --brand-logo-from:       #1e4976;
+  --brand-logo-to:         #2563eb;
+  --brand-nav-hover-bg:    rgba(59,130,246,0.12);
+  --brand-nav-hover-text:  #93c5fd;
+  --brand-nav-active-bg:   rgba(59,130,246,0.22);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #3b82f6;
+  --brand-nav-text:        #8fafc8;
+  --brand-accent:          #3b82f6;
+  --brand-badge-bg:        rgba(59,130,246,0.15);
+  --brand-badge-text:      #93c5fd;
+  --brand-switcher-active: #2563eb;
+  --brand-header-accent:   #1e40af;
+}
+
+/* ── Three In (ti) ──────────────────────────────────────────── */
+[data-brand="ti"] {
+  --brand-sidebar-bg:      #0e1f2e;
+  --brand-sidebar-border:  #1a3a4a;
+  --brand-logo-from:       #1e4976;
+  --brand-logo-to:         #2563eb;
+  --brand-nav-hover-bg:    rgba(59,130,246,0.12);
+  --brand-nav-hover-text:  #93c5fd;
+  --brand-nav-active-bg:   rgba(59,130,246,0.22);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #60a5fa;
+  --brand-nav-text:        #8fafc8;
+  --brand-accent:          #3b82f6;
+  --brand-badge-bg:        rgba(59,130,246,0.18);
+  --brand-badge-text:      #93c5fd;
+  --brand-switcher-active: #1d4ed8;
+  --brand-header-accent:   #1e3a5f;
+}
+
+/* ── Bab Al Balad (bb) ──────────────────────────────────────── */
+[data-brand="bb"] {
+  --brand-sidebar-bg:      #1c0f00;
+  --brand-sidebar-border:  #3d1f00;
+  --brand-logo-from:       #92400e;
+  --brand-logo-to:         #d97706;
+  --brand-nav-hover-bg:    rgba(217,119,6,0.14);
+  --brand-nav-hover-text:  #fcd34d;
+  --brand-nav-active-bg:   rgba(217,119,6,0.25);
+  --brand-nav-active-text: #ffffff;
+  --brand-nav-active-bar:  #f59e0b;
+  --brand-nav-text:        #b8965a;
+  --brand-accent:          #d97706;
+  --brand-badge-bg:        rgba(217,119,6,0.18);
+  --brand-badge-text:      #fcd34d;
+  --brand-switcher-active: #b45309;
+  --brand-header-accent:   #451a03;
+}
+
+body {
+  font-family: var(--font-main);
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ── Print ──────────────────────────────────────────────── */
+@media print {
+  body { background: white; color: black; }
+  @page { size: A4; margin: 1.5cm; }
+
+  /* Selective print: Dine In hides DO columns, Dine Out hides DI columns */
+  body[data-print-mode="di"] .print-do-only { display: none !important; }
+  body[data-print-mode="do"] .print-di-only { display: none !important; }
+
+  /* Kitchen print: hide full price view, show kitchen view only */
+  body[data-print-mode="kitchen"] .print-full-view  { display: none !important; }
+  body[data-print-mode="kitchen"] .print-kitchen-view { display: block !important; }
+  /* When not kitchen mode, hide kitchen view */
+  body:not([data-print-mode="kitchen"]) .print-kitchen-view { display: none !important; }
+}
+
+/* ── Sidebar nav transitions ─────────────────────────────── */
+.sidebar-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--brand-nav-text);
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  border-right: 3px solid transparent;
+  cursor: pointer;
+  text-decoration: none;
+}
+.sidebar-nav-item:hover {
+  background: var(--brand-nav-hover-bg);
+  color: var(--brand-nav-hover-text);
+}
+.sidebar-nav-item.active {
+  background: var(--brand-nav-active-bg);
+  color: var(--brand-nav-active-text);
+  font-weight: 600;
+  border-right-color: var(--brand-nav-active-bar);
+}
+
+/* ── Stat card hover ─────────────────────────────────────── */
+.stat-card {
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.3s ease;
+}
+.stat-card:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+/* ── Dashboard shell layout ──────────────────────────────── */
+@media (min-width: 1024px) {
+  .ds-sidebar { transform: translateX(0) !important; }
+  .ds-main    { margin-right: 260px; }
+}
+
+/* ── FC status colors (shared across pages) ─────────────── */
+.fc-ok    { color: #059669; }
+.fc-warn  { color: #d97706; }
+.fc-over  { color: #dc2626; }
+.fc-ok-bg   { background: #f0fdf4; border: 1px solid #bbf7d0; color: #059669; }
+.fc-warn-bg { background: #fffbeb; border: 1px solid #fde68a; color: #d97706; }
+.fc-over-bg { background: #fef2f2; border: 1px solid #fecaca; color: #dc2626; }
