@@ -1,0 +1,3956 @@
+﻿'use client'
+
+import { useState, useCallback, useEffect } from 'react'
+import { useParams } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
+import { useUserStore } from '@/stores/userStore'
+import { usePermissionsStore } from '@/stores/permissionsStore'
+import { useGlobalLoading } from '@/contexts/globalLoading'
+import { getCurrentYearMonth, lastNMonths, formatYearMonth, monthRange, shiftMonth } from '@/lib/period'
+import type { BrandId } from '@/types'
+import { VAT_RATE, FC_TARGET } from '@/lib/calculations'
+import { exportPLReport } from '@/lib/excel'
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ScatterChart, Scatter, ReferenceLine, ZAxis,
+} from 'recharts'
+
+type ReportTab = 'pl' | 'fc' | 'breakeven' | 'purchases' | 'sales' | 'menu' | 'variance' | 'primecost' | 'pricing' | 'trends' | 'branches' | 'prices' | 'actual-fc' | 'dine' | 'discounts' | 'consumption' | 'compare-pl' | 'snapshot' | 'waste' | 'inv-valuation' | 'stocktake-variance'
+
+const TAB_MODULE: Record<ReportTab, string> = {
+  'pl':          'report_pl',
+  'fc':          'report_fc',
+  'breakeven':   'report_breakeven',
+  'purchases':   'report_purchases',
+  'sales':       'report_sales',
+  'menu':        'report_menu',
+  'variance':    'report_variance',
+  'primecost':   'report_primecost',
+  'pricing':     'report_pricing',
+  'trends':      'report_trends',
+  'branches':    'report_branches',
+  'prices':      'report_prices',
+  'actual-fc':   'report_actual_fc',
+  'dine':        'report_dine',
+  'discounts':   'report_discounts',
+  'consumption': 'report_consumption',
+  'compare-pl':     'report_compare_pl',
+  'snapshot':       'report_pl',
+  'waste':              'report_waste',
+  'inv-valuation':      'report_inv_valuation',
+  'stocktake-variance': 'report_stocktake_variance',
+}
+
+interface Props {
+  initialBranches: string[]
+  initialFcLow: number
+  initialFcHigh: number
+}
+
+// ── Helpers ────────────────────────────────────────────────────────
+function KpiCard({ label, value, sub, color }: { label: string; value: string; sub?: string; color?: string }) {
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl p-5">
+      <div className="text-xs text-gray-500 mb-1">{label}</div>
+      <div className={`text-2xl font-bold font-mono ${color ?? 'text-gray-900'}`}>{value}</div>
+      {sub && <div className="text-xs text-gray-400 mt-1">{sub}</div>}
+    </div>
+  )
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return <h3 className="text-sm font-semibold text-gray-700 mb-3 mt-6 first:mt-0">{children}</h3>
+}
+
+const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316']
+
+function wb(q: any, branch: string) { return branch ? q.eq('branch_name', branch) : q }
+
+// ── Main Page ──────────────────────────────────────────────────────
+export default function ReportsClient({ initialBranches, initialFcLow, initialFcHigh }: Props) {
+  const { brand } = useParams() as { brand: BrandId }
+  const months = lastNMonths(12)
+  const [tab, setTab] = useState<ReportTab>('pl')
+  const [month, setMonth] = useState(getCurrentYearMonth())
+  const [branch, setBranch] = useState('')
+  const [branches] = useState<string[]>(initialBranches)
+  const [fcLow, setFcLow]   = useState(initialFcLow)
+  const [fcHigh, setFcHigh] = useState(initialFcHigh)
+
+  const { hasPermission, isSuperAdmin, loaded: permsLoaded } = usePermissionsStore()
+
+  const [closedUpTo, setClosedUpTo]   = useState<string | null>(null)
+  const [snapshot, setSnapshot]       = useState<Record<string, any> | null>(null)
+
+  // جلب حالة الإغلاق لهذا البراند
+  useEffect(() => {
+    const supabase = createClient()
+    ;(supabase.from('brands') as any)
+      .select('closed_up_to').eq('id', brand).maybeSingle()
+      .then(({ data }: any) => setClosedUpTo(data?.closed_up_to ?? null))
+  }, [brand])
+
+  // إذا الشهر مُغلق، جلب الـ snapshot
+  useEffect(() => {
+    if (!closedUpTo || month > closedUpTo) { setSnapshot(null); return }
+    const supabase = createClient()
+    ;(supabase.from('period_snapshots') as any)
+      .select('snapshot').eq('brand_id', brand).eq('year_month', month).maybeSingle()
+      .then(({ data }: any) => setSnapshot(data?.snapshot ?? null))
+  }, [brand, month, closedUpTo])
+
+  const isMonthClosed = !!closedUpTo && month <= closedUpTo
+
+  const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
+
+  const ALL_TABS: { key: ReportTab; label: string }[] = [
+    { key: 'pl',          label: 'الأرباح والخسائر' },
+    { key: 'fc',          label: 'تحليل Food Cost' },
+    { key: 'breakeven',   label: 'نقطة التعادل' },
+    { key: 'purchases',   label: 'تحليل المشتريات' },
+    { key: 'sales',       label: 'تحليل المبيعات' },
+    { key: 'menu',        label: 'هندسة القائمة' },
+    { key: 'variance',    label: 'مقارنة FC%' },
+    { key: 'primecost',   label: 'التكلفة الإجمالية' },
+    { key: 'pricing',     label: 'التسعير العكسي' },
+    { key: 'trends',      label: 'الاتجاهات' },
+    { key: 'branches',    label: 'مقارنة الفروع' },
+    { key: 'prices',      label: 'تاريخ الأسعار' },
+    { key: 'actual-fc',   label: 'FC فعلي vs نظري' },
+    { key: 'dine',        label: 'داخل vs توصيل' },
+    { key: 'discounts',   label: 'الخصومات والمرتجعات' },
+    { key: 'consumption', label: 'استهلاك المواد' },
+    { key: 'compare-pl',    label: 'مقارنة الفترات' },
+    { key: 'waste',             label: 'تقرير الهدر' },
+    { key: 'inv-valuation',     label: 'تقييم المخزون' },
+    { key: 'stocktake-variance', label: 'فروق الجرد' },
+    { key: 'snapshot',          label: '🔒 لقطة الإغلاق' },
+  ]
+
+  // فلترة التبويبات بحسب الصلاحيات — قبل تحميل الصلاحيات نعرض الكل
+  const tabs = (!permsLoaded || isSuperAdmin
+    ? ALL_TABS
+    : ALL_TABS.filter(t => hasPermission(TAB_MODULE[t.key], 'view'))
+  ).filter(t => t.key !== 'snapshot' || isMonthClosed)
+
+  // إذا التبويب الحالي أصبح مخفياً، انتقل للأول المتاح
+  useEffect(() => {
+    if (!permsLoaded || isSuperAdmin) return
+    if (tabs.length > 0 && !tabs.find(t => t.key === tab)) {
+      setTab(tabs[0].key)
+    }
+  }, [permsLoaded, isSuperAdmin, tabs, tab])
+
+  if (permsLoaded && !isSuperAdmin && tabs.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
+        لا توجد تقارير متاحة لهذا الدور
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5 max-w-7xl">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900">التقارير المالية والإدارية</h1>
+          <p className="text-gray-500 text-sm mt-0.5">تحليل شامل للتكاليف والإيرادات والأداء</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {branches.length > 0 && (
+            <select value={branch} onChange={e => setBranch(e.target.value)} className={inputCls}>
+              <option value="">جميع الفروع</option>
+              {branches.map(b => <option key={b} value={b}>{b}</option>)}
+            </select>
+          )}
+          <select value={month} onChange={e => setMonth(e.target.value)} className={inputCls}>
+            {months.map(m => <option key={m} value={m}>{formatYearMonth(m)}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-0.5 border-b border-gray-200 overflow-x-auto">
+        {tabs.map(t => (
+          <button key={t.key} onClick={() => setTab(t.key)}
+            className={`px-5 py-2.5 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab === t.key ? 'border-blue-500 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* بانر الإغلاق */}
+      {isMonthClosed && tab !== 'snapshot' && (
+        <div className="flex items-center gap-2 px-4 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+          <span>🔒</span>
+          <span>هذه الفترة مُغلقة — البيانات ثابتة ولا يمكن إضافة معاملات بتاريخها.</span>
+          <button onClick={() => setTab('snapshot')} className="ms-auto text-xs underline text-amber-700 hover:text-amber-900">
+            عرض لقطة الإغلاق ←
+          </button>
+        </div>
+      )}
+
+      {tab === 'snapshot' && <SnapshotTab snapshot={snapshot} month={month} />}
+      {tab === 'pl'        && <PLReport        brand={brand} month={month} branch={branch} fcLow={fcLow} />}
+      {tab === 'fc'        && <FCReport         brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'breakeven' && <BreakevenReport  brand={brand} month={month} branch={branch} />}
+      {tab === 'purchases' && <PurchasesReport     brand={brand} month={month} />}
+      {tab === 'sales'     && <SalesReport         brand={brand} month={month} branch={branch} />}
+      {tab === 'menu'      && <MenuEngineering     brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'variance'  && <VarianceReport      brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'primecost' && <PrimeCostReport    brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'pricing'   && <ReversePricingTool brand={brand} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'trends'    && <TrendsReport        brand={brand} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'branches'  && <BranchesReport      month={month} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'prices'    && <PriceHistoryReport  brand={brand} />}
+      {tab === 'actual-fc' && <ActualFCReport       brand={brand} month={month} branch={branch} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'dine'        && <DineReport           brand={brand} fcLow={fcLow} fcHigh={fcHigh} />}
+      {tab === 'discounts'   && <DiscountsReport      brand={brand} month={month} branch={branch} />}
+      {tab === 'consumption' && <ConsumptionReport    brand={brand} month={month} />}
+      {tab === 'compare-pl'    && <ComparePLReport      brand={brand} months={lastNMonths(12)} />}
+      {tab === 'waste'             && <WasteReport              brand={brand} month={month} branch={branch} />}
+      {tab === 'inv-valuation'     && <InvValuationReport        brand={brand} />}
+      {tab === 'stocktake-variance' && <StocktakeVarianceReport  brand={brand} />}
+    </div>
+  )
+}
+
+// ── 1. P&L Report ─────────────────────────────────────────────────
+async function loadPLMonthData(supabase: any, brand: string, m: string, branch: string) {
+  const { start, end } = monthRange(m)
+  const [{ data: sales }, { data: labor }, { data: overhead }, { data: brandRow }] = await Promise.all([
+    wb((supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch),
+    (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
+    (supabase.from('overhead_costs') as any).select('amount, category').eq('brand_id', brand).eq('month', m),
+    (supabase.from('brands') as any).select('delivery_commission_pct').eq('id', brand).single(),
+  ])
+  const totalRevWithVat    = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
+  const revenue            = totalRevWithVat / VAT_RATE
+  // COGS = theoretical cost from sales explosion (daily_sales.cost), not purchases
+  const materialCost       = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
+  const laborCost          = (labor || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const overheadCost       = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const commissionPct      = (brandRow as any)?.delivery_commission_pct ?? 0
+  const deliveryCommission = revenue * commissionPct / 100
+  const totalCost          = materialCost + laborCost + overheadCost + deliveryCommission
+  const grossProfit        = revenue - materialCost
+  const netProfit          = revenue - totalCost
+  const vat                = totalRevWithVat - revenue
+  const ovByCategory = (overhead || []).reduce((acc: Record<string, number>, r: any) => {
+    acc[r.category] = (acc[r.category] ?? 0) + r.amount; return acc
+  }, {} as Record<string, number>)
+  return { revenue, totalRevWithVat, vat, materialCost, laborCost, overheadCost, deliveryCommission, commissionPct, totalCost, grossProfit, netProfit, ovByCategory }
+}
+
+function PLReport({ brand, month, branch = '', fcLow = FC_TARGET }: { brand: string; month: string; branch?: string; fcLow?: number }) {
+  const [cur,  setCur]  = useState<any>(null)
+  const [prev, setPrev] = useState<any>(null)
+  const [ly,   setLy]   = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  const prevMonth = shiftMonth(month, -1)
+  const lyMonth   = shiftMonth(month, -12)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const [c, p, l] = await Promise.all([
+      loadPLMonthData(supabase, brand, month,     branch),
+      loadPLMonthData(supabase, brand, prevMonth, branch),
+      loadPLMonthData(supabase, brand, lyMonth,   branch),
+    ])
+    setCur(c); setPrev(p); setLy(l)
+    setLoading(false)
+  }, [brand, month, branch, prevMonth, lyMonth])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ تحضير قائمة الدخل...</div>
+  if (!cur) return null
+
+  const hasLy = ly.revenue > 0
+  const N = (v: number) => Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 0 })
+  const P = (v: number, b: number) => b > 0 ? `${((v / b) * 100).toFixed(1)}%` : '—'
+
+  const totalOpEx     = cur.laborCost  + cur.overheadCost  + cur.deliveryCommission
+  const totalOpExPrev = prev.laborCost + prev.overheadCost + prev.deliveryCommission
+  const totalOpExLy   = ly.laborCost   + ly.overheadCost   + ly.deliveryCommission
+  const primeCost     = cur.materialCost  + cur.laborCost
+  const primePrev     = prev.materialCost + prev.laborCost
+  const primeLy       = ly.materialCost   + ly.laborCost
+  const ovCats        = Object.entries(cur.ovByCategory ?? {}) as [string, number][]
+
+  type RowKind = 'section' | 'line' | 'sub' | 'total' | 'net' | 'sep' | 'metric'
+  interface PLRow {
+    kind: RowKind; key: string
+    label?: string; sublabel?: string; indent?: boolean
+    curV?: number; prevV?: number; lyV?: number
+    isExp?: boolean; better?: 'higher' | 'lower'
+    curPct?: string; prevPct?: string; lyPct?: string
+  }
+
+  const overheadRows: PLRow[] = ovCats.length > 1
+    ? ovCats.map(([cat, amt]) => ({
+        kind: 'line' as RowKind, key: `ovh-${cat}`,
+        label: cat, sublabel: 'Fixed Overhead', indent: true,
+        curV: amt,
+        prevV: (prev.ovByCategory as Record<string, number>)[cat] ?? 0,
+        lyV:   (ly.ovByCategory   as Record<string, number>)[cat] ?? 0,
+        isExp: true, better: 'lower' as const,
+      }))
+    : [{
+        kind: 'line' as RowKind, key: 'ovh',
+        label: 'التكاليف الثابتة والعمومية', sublabel: 'Fixed & Overhead Costs', indent: true,
+        curV: cur.overheadCost, prevV: prev.overheadCost, lyV: ly.overheadCost,
+        isExp: true, better: 'lower' as const,
+      }]
+
+  const rows: PLRow[] = [
+    { kind: 'section', key: 's1', label: 'Revenue — الإيرادات' },
+    { kind: 'line',  key: 'gross-sales', label: 'إجمالي المبيعات شامل ضريبة القيمة المضافة', sublabel: 'Gross Sales including VAT (15%)', indent: true, curV: cur.totalRevWithVat, prevV: prev.totalRevWithVat, lyV: ly.totalRevWithVat, better: 'higher' },
+    { kind: 'line',  key: 'vat',         label: 'يُطرح: ضريبة القيمة المضافة', sublabel: 'Less: Value Added Tax (15%)', indent: true, curV: cur.vat, prevV: prev.vat, lyV: ly.vat, isExp: true },
+    { kind: 'total', key: 'net-rev',     label: 'صافي الإيرادات — Net Revenue', curV: cur.revenue, prevV: prev.revenue, lyV: ly.revenue, better: 'higher' },
+    { kind: 'sep',   key: 'sep1' },
+
+    { kind: 'section', key: 's2', label: 'Cost of Sales — تكلفة البضاعة المباعة (COGS)' },
+    { kind: 'line',  key: 'cogs',        label: 'تكلفة المواد الغذائية والمشروبات', sublabel: 'Food & Beverage Cost', indent: true, curV: cur.materialCost, prevV: prev.materialCost, lyV: ly.materialCost, isExp: true, better: 'lower' },
+    { kind: 'total', key: 'gross-profit',label: 'مجمل الربح — Gross Profit', curV: cur.grossProfit, prevV: prev.grossProfit, lyV: ly.grossProfit, better: 'higher' },
+    { kind: 'metric',key: 'm-fc',        label: 'نسبة تكلفة الغذاء — Food Cost %', curPct: P(cur.materialCost, cur.revenue), prevPct: P(prev.materialCost, prev.revenue), lyPct: P(ly.materialCost, ly.revenue), better: 'lower' },
+    { kind: 'sep',   key: 'sep2' },
+
+    { kind: 'section', key: 's3', label: 'Operating Expenses — المصاريف التشغيلية' },
+    { kind: 'line',  key: 'labor',       label: 'تكاليف العمالة', sublabel: 'Labor Costs', indent: true, curV: cur.laborCost, prevV: prev.laborCost, lyV: ly.laborCost, isExp: true, better: 'lower' },
+    ...overheadRows,
+    ...(cur.deliveryCommission > 0 || prev.deliveryCommission > 0 ? [{
+      kind: 'line' as RowKind, key: 'delivery',
+      label: `عمولات منصات التوصيل (${cur.commissionPct}%)`, sublabel: 'Delivery Platform Commissions',
+      indent: true, curV: cur.deliveryCommission, prevV: prev.deliveryCommission, lyV: ly.deliveryCommission,
+      isExp: true, better: 'lower' as const,
+    }] : []),
+    { kind: 'sub',   key: 'total-opex',  label: 'إجمالي المصاريف التشغيلية — Total Operating Expenses', curV: totalOpEx, prevV: totalOpExPrev, lyV: totalOpExLy, isExp: true, better: 'lower' },
+    { kind: 'sep',   key: 'sep3' },
+
+    { kind: 'net',   key: 'net-profit',  label: 'صافي الربح — Net Profit / (Loss)', curV: cur.netProfit, prevV: prev.netProfit, lyV: ly.netProfit, better: 'higher' },
+    { kind: 'metric',key: 'm-net',       label: 'هامش صافي الربح — Net Profit Margin', curPct: P(cur.netProfit, cur.revenue), prevPct: P(prev.netProfit, prev.revenue), lyPct: P(ly.netProfit, ly.revenue), better: 'higher' },
+    { kind: 'sep',   key: 'sep4' },
+
+    { kind: 'section', key: 's4', label: 'Restaurant KPIs — مؤشرات الأداء التشغيلية' },
+    { kind: 'metric',key: 'm-prime',     label: 'Prime Cost — تكلفة الغذاء والعمالة معاً', curPct: P(primeCost, cur.revenue), prevPct: P(primePrev, prev.revenue), lyPct: P(primeLy, ly.revenue), better: 'lower' },
+    { kind: 'metric',key: 'm-labor-pct', label: 'نسبة تكاليف العمالة — Labor Cost %', curPct: P(cur.laborCost, cur.revenue), prevPct: P(prev.laborCost, prev.revenue), lyPct: P(ly.laborCost, ly.revenue), better: 'lower' },
+    { kind: 'metric',key: 'm-ovh-pct',  label: 'نسبة التكاليف الثابتة — Overhead %', curPct: P(cur.overheadCost, cur.revenue), prevPct: P(prev.overheadCost, prev.revenue), lyPct: P(ly.overheadCost, ly.revenue), better: 'lower' },
+  ]
+
+  const colSpan = hasLy ? 6 : 5
+
+  function renderRow(row: PLRow) {
+    if (row.kind === 'sep') {
+      return <tr key={row.key}><td colSpan={colSpan} className="h-2 bg-gray-50" /></tr>
+    }
+
+    if (row.kind === 'section') {
+      return (
+        <tr key={row.key}>
+          <td colSpan={colSpan} className="bg-gray-800 px-5 py-2">
+            <span className="text-[10px] font-bold tracking-widest uppercase text-white">{row.label}</span>
+          </td>
+        </tr>
+      )
+    }
+
+    if (row.kind === 'metric') {
+      return (
+        <tr key={row.key} className="bg-sky-50/70 border-b border-sky-100">
+          <td className="px-5 py-2 text-[10px] text-sky-700 italic font-medium">{row.label}</td>
+          <td className="px-3 py-2 text-center text-xs font-mono font-bold text-sky-800">{row.curPct}</td>
+          <td className="px-3 py-2 text-center text-xs font-mono text-sky-400">{row.prevPct}</td>
+          {hasLy && <td className="px-3 py-2 text-center text-xs font-mono text-sky-300">{row.lyPct}</td>}
+          <td /><td />
+        </tr>
+      )
+    }
+
+    const v     = row.curV  ?? 0
+    const vPrev = row.prevV ?? 0
+    const vLy   = row.lyV   ?? 0
+    const isExp = row.isExp ?? false
+
+    const fmtAmt = (val: number, expense: boolean) => {
+      if (val === 0) return <span className="text-gray-300 font-mono text-xs" dir="ltr">—</span>
+      const abs = N(Math.abs(val))
+      const txt = expense ? `(${abs})` : (val < 0 ? `(${abs})` : abs)
+      const cls = expense ? 'text-gray-600' : (val < 0 ? 'text-red-600' : 'text-gray-800')
+      return <span className={`font-mono text-xs ${cls}`} dir="ltr">{txt}</span>
+    }
+
+    const base    = Math.abs(vPrev)
+    const cur_abs = Math.abs(v)
+    const diffPct = base > 0 ? ((cur_abs - base) / base) * 100 : 0
+    const up      = cur_abs > base
+    const good    = row.better === 'higher' ? up : !up
+    const deltaEl = base > 0
+      ? <span className={`text-[10px] font-semibold ${good ? 'text-emerald-600' : 'text-red-500'}`}>{up ? '▲' : '▼'} {Math.abs(diffPct).toFixed(1)}%</span>
+      : <span className="text-gray-200 text-[10px]">—</span>
+
+    const pctEl = cur.revenue > 0
+      ? <span className="text-[10px] font-mono text-gray-400">{P(Math.abs(v), cur.revenue)}</span>
+      : null
+
+    if (row.kind === 'line') return (
+      <tr key={row.key} className="border-b border-gray-100 hover:bg-gray-50/40 transition-colors">
+        <td className={`py-2.5 ${row.indent ? 'pl-8 pr-4' : 'px-5'}`}>
+          <div className="text-xs text-gray-700">{row.label}</div>
+          {row.sublabel && <div className="text-[10px] text-gray-400 mt-0.5 font-mono">{row.sublabel}</div>}
+        </td>
+        <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
+        <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
+        {hasLy && <td className="px-3 py-2.5 text-right opacity-35">{fmtAmt(vLy, isExp)}</td>}
+        <td className="px-3 py-2.5 text-center">{pctEl}</td>
+        <td className="px-3 py-2.5 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'sub') return (
+      <tr key={row.key} className="bg-gray-100 border-t border-gray-300">
+        <td className="px-5 py-2.5">
+          <span className="text-xs font-semibold text-gray-700">{row.label}</span>
+        </td>
+        <td className="px-3 py-2.5 text-right">{fmtAmt(v, isExp)}</td>
+        <td className="px-3 py-2.5 text-right opacity-55">{fmtAmt(vPrev, isExp)}</td>
+        {hasLy && <td className="px-3 py-2.5 text-right opacity-35">{fmtAmt(vLy, isExp)}</td>}
+        <td className="px-3 py-2.5 text-center">{pctEl}</td>
+        <td className="px-3 py-2.5 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'total') return (
+      <tr key={row.key} className="bg-gray-200 border-t-2 border-gray-400">
+        <td className="px-5 py-3">
+          <span className="text-sm font-bold text-gray-800">{row.label}</span>
+        </td>
+        <td className="px-3 py-3 text-right">
+          <span className={`font-mono text-sm font-bold ${v < 0 ? 'text-red-700' : 'text-gray-800'}`} dir="ltr">
+            {v < 0 ? `(${N(Math.abs(v))})` : N(v)}
+          </span>
+        </td>
+        <td className="px-3 py-3 text-right opacity-55">
+          <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
+            {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
+          </span>
+        </td>
+        {hasLy && <td className="px-3 py-3 text-right opacity-35">
+          <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-600' : 'text-gray-600'}`} dir="ltr">
+            {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
+          </span>
+        </td>}
+        <td className="px-3 py-3 text-center">
+          <span className="text-xs font-mono font-bold text-gray-500">{P(Math.abs(v), cur.revenue)}</span>
+        </td>
+        <td className="px-3 py-3 text-center">{deltaEl}</td>
+      </tr>
+    )
+
+    if (row.kind === 'net') {
+      const isLoss = v < 0
+      return (
+        <tr key={row.key} className={`border-t-2 ${isLoss ? 'bg-red-50 border-red-400' : 'bg-emerald-50 border-emerald-500'}`}>
+          <td className="px-5 py-3">
+            <span className={`text-sm font-bold ${isLoss ? 'text-red-800' : 'text-emerald-800'}`}>{row.label}</span>
+          </td>
+          <td className="px-3 py-3 text-right">
+            <span className={`font-mono text-sm font-bold ${isLoss ? 'text-red-700' : 'text-emerald-700'}`} dir="ltr">
+              {v < 0 ? `(${N(Math.abs(v))})` : N(v)} ر.س
+            </span>
+          </td>
+          <td className="px-3 py-3 text-right opacity-70">
+            <span className={`font-mono text-xs ${vPrev < 0 ? 'text-red-500' : 'text-gray-600'}`} dir="ltr">
+              {vPrev < 0 ? `(${N(Math.abs(vPrev))})` : N(vPrev)}
+            </span>
+          </td>
+          {hasLy && <td className="px-3 py-3 text-right opacity-50">
+            <span className={`font-mono text-xs ${vLy < 0 ? 'text-red-500' : 'text-gray-600'}`} dir="ltr">
+              {vLy < 0 ? `(${N(Math.abs(vLy))})` : N(vLy)}
+            </span>
+          </td>}
+          <td className="px-3 py-3 text-center">
+            <span className={`text-xs font-mono font-bold ${isLoss ? 'text-red-600' : 'text-emerald-600'}`}>{P(v, cur.revenue)}</span>
+          </td>
+          <td className="px-3 py-3 text-center">{deltaEl}</td>
+        </tr>
+      )
+    }
+
+    return null
+  }
+
+  const kpiCards = [
+    { en: 'Net Revenue',   ar: 'صافي الإيرادات',   v: cur.revenue,    pct: null,                        color: 'border-t-blue-500',    txt: 'text-blue-700' },
+    { en: 'Gross Profit',  ar: 'مجمل الربح',        v: cur.grossProfit, pct: P(cur.grossProfit, cur.revenue), color: 'border-t-emerald-500', txt: 'text-emerald-700' },
+    { en: 'Food Cost %',   ar: 'نسبة تكلفة الغذاء', v: null,            pct: P(cur.materialCost, cur.revenue), color: 'border-t-orange-500', txt: cur.revenue > 0 && (cur.materialCost / cur.revenue) * 100 <= fcLow ? 'text-emerald-600' : 'text-orange-600' },
+    { en: 'Net Profit',    ar: 'صافي الربح',         v: cur.netProfit,  pct: P(cur.netProfit, cur.revenue),   color: cur.netProfit >= 0 ? 'border-t-emerald-600' : 'border-t-red-500', txt: cur.netProfit >= 0 ? 'text-emerald-700' : 'text-red-700' },
+  ]
+
+  const barData = [
+    { name: 'الإيرادات',  cur: cur.revenue,               prev: prev.revenue },
+    { name: 'مجمل الربح', cur: cur.grossProfit,            prev: prev.grossProfit },
+    { name: 'صافي الربح', cur: Math.max(0, cur.netProfit), prev: Math.max(0, prev.netProfit) },
+  ]
+
+  const pieData = [
+    { name: 'المواد الغذائية', value: cur.materialCost },
+    { name: 'العمالة',          value: cur.laborCost },
+    { name: 'التكاليف الثابتة', value: cur.overheadCost },
+    ...(cur.deliveryCommission > 0 ? [{ name: 'عمولات التوصيل', value: cur.deliveryCommission }] : []),
+    { name: 'صافي الربح',       value: Math.max(0, cur.netProfit) },
+  ].filter(d => d.value > 0)
+
+  const kpiPerf = [
+    { label: 'Food Cost %',   val: cur.revenue > 0 ? (cur.materialCost / cur.revenue) * 100 : 0, target: fcLow, targetLbl: `≤ ${fcLow}%`, higherGood: false },
+    { label: 'Prime Cost %',  val: cur.revenue > 0 ? (primeCost / cur.revenue) * 100 : 0,        target: 60, targetLbl: '≤ 60%', higherGood: false },
+    { label: 'Gross Margin %',val: cur.revenue > 0 ? (cur.grossProfit / cur.revenue) * 100 : 0,  target: 65, targetLbl: '≥ 65%', higherGood: true  },
+    { label: 'Net Margin %',  val: cur.revenue > 0 ? (cur.netProfit / cur.revenue) * 100 : 0,    target: 15, targetLbl: '≥ 15%', higherGood: true  },
+  ]
+
+  return (
+    <div className="space-y-5" id="pl-report-content">
+      {/* ─── Formal Header Card ─── */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+        <div className="bg-gray-800 px-6 py-4 flex items-start justify-between">
+          <div>
+            <div className="text-[9px] tracking-[0.25em] text-gray-400 uppercase font-medium">Income Statement / IFRS Presentation</div>
+            <h2 className="text-lg font-bold text-white mt-1">قائمة الدخل</h2>
+            <div className="text-gray-400 text-xs mt-1">
+              للفترة المنتهية في {formatYearMonth(month)} · بالريال السعودي (SAR)
+            </div>
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            <button
+              onClick={() => exportPLReport({
+                month, brand,
+                cur:  { revenue: cur.revenue,  materialCost: cur.materialCost,  laborCost: cur.laborCost,  overheadCost: cur.overheadCost,  deliveryCommission: cur.deliveryCommission,  netProfit: cur.netProfit,  grossProfit: cur.grossProfit,  ovByCategory: cur.ovByCategory ?? {} },
+                prev: { revenue: prev.revenue, materialCost: prev.materialCost, laborCost: prev.laborCost, overheadCost: prev.overheadCost, deliveryCommission: prev.deliveryCommission, netProfit: prev.netProfit, grossProfit: prev.grossProfit },
+                ly:   { revenue: ly.revenue,   materialCost: ly.materialCost,   laborCost: ly.laborCost,   overheadCost: ly.overheadCost,   deliveryCommission: ly.deliveryCommission,   netProfit: ly.netProfit,   grossProfit: ly.grossProfit },
+                prevLabel: formatYearMonth(prevMonth),
+                lyLabel:   formatYearMonth(lyMonth),
+              }).catch(console.error)}
+              className="text-[11px] px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-colors"
+            >⬇ Excel</button>
+            <button
+              onClick={() => import('@/lib/pdf').then(m => m.exportToPDF('pl-report-content', `قائمة-الدخل-${month}`)).catch(console.error)}
+              className="text-[11px] px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-lg transition-colors"
+            >⬇ PDF</button>
+          </div>
+        </div>
+        {/* KPI Ribbon */}
+        <div className="grid grid-cols-2 md:grid-cols-4 divide-x divide-x-reverse divide-gray-100 border-t border-gray-100">
+          {kpiCards.map((k, i) => (
+            <div key={i} className={`px-5 py-4 border-t-4 ${k.color}`}>
+              <div className="text-[9px] text-gray-400 uppercase tracking-widest font-medium">{k.en}</div>
+              <div className="text-xs text-gray-500 mt-0.5">{k.ar}</div>
+              <div className={`text-xl font-bold font-mono mt-1.5 ${k.txt}`}>
+                {k.v != null ? `${N(k.v)} ر.س` : k.pct}
+              </div>
+              {k.pct && k.v != null && <div className="text-[10px] text-gray-400 font-mono mt-0.5">{k.pct} من الإيراد</div>}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+        {/* ─── Main P&L Table ─── */}
+        <div className="xl:col-span-2 bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+          {/* Column Headers */}
+          <div className="bg-gray-50 border-b border-gray-200 grid text-[10px] font-semibold uppercase tracking-wide"
+            style={{ gridTemplateColumns: hasLy ? '1fr 100px 88px 78px 55px 62px' : '1fr 110px 96px 55px 62px' }}>
+            <div className="px-5 py-2.5 text-gray-500">البند / Item</div>
+            <div className="px-3 py-2.5 text-right text-blue-600">{formatYearMonth(month)}</div>
+            <div className="px-3 py-2.5 text-right text-gray-400">{formatYearMonth(prevMonth)}</div>
+            {hasLy && <div className="px-3 py-2.5 text-right text-purple-400">{formatYearMonth(lyMonth)}</div>}
+            <div className="px-3 py-2.5 text-center text-gray-400">% إيراد</div>
+            <div className="px-3 py-2.5 text-center text-gray-400">تغيّر</div>
+          </div>
+          <table suppressHydrationWarning className="w-full">
+            <tbody>{rows.map(row => renderRow(row))}</tbody>
+          </table>
+          <div className="px-5 py-2.5 bg-gray-50 border-t border-gray-100">
+            <p className="text-[9px] text-gray-400 italic">
+              * جميع الأرقام بالريال السعودي (SAR) · الإيرادات معروضة صافية من ضريبة القيمة المضافة · يُعدّ هذا التقرير للأغراض الإدارية الداخلية
+            </p>
+          </div>
+        </div>
+
+        {/* ─── Side Panels ─── */}
+        <div className="space-y-4">
+          {/* Grouped bar */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-gray-400 mb-3 uppercase tracking-wider">مقارنة الفترات</p>
+            <ResponsiveContainer width="100%" height={190}>
+              <BarChart data={barData} margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip formatter={(v: any) => [`${Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`]} />
+                <Legend iconSize={8} formatter={(v: string) => <span style={{ fontSize: 10 }}>{v === 'cur' ? formatYearMonth(month) : formatYearMonth(prevMonth)}</span>} />
+                <Bar dataKey="cur"  name="cur"  fill="#1d4ed8" radius={[3,3,0,0]} />
+                <Bar dataKey="prev" name="prev" fill="#94a3b8" radius={[3,3,0,0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Cost donut */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm">
+            <p className="text-[10px] font-semibold text-gray-400 mb-3 uppercase tracking-wider">هيكل التكاليف والربح</p>
+            <ResponsiveContainer width="100%" height={165}>
+              <PieChart>
+                <Pie data={pieData} cx="50%" cy="50%" innerRadius={40} outerRadius={65} paddingAngle={2} dataKey="value">
+                  {pieData.map((_, i) => <Cell key={i} fill={['#ef4444','#f97316','#eab308','#6366f1','#22c55e'][i % 5]} />)}
+                </Pie>
+                <Tooltip formatter={(v: any) => [`${Number(v).toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س`]} />
+                <Legend iconType="circle" iconSize={8} formatter={(v: any) => <span style={{ fontSize: 10 }}>{v}</span>} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* KPI Performance Scorecard */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm space-y-3">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">تقييم الأداء التشغيلي</p>
+            {kpiPerf.map(k => {
+              const good = k.higherGood ? k.val >= k.target : k.val <= k.target
+              const barW = k.higherGood
+                ? Math.min(100, (k.val / (k.target * 1.6)) * 100)
+                : Math.min(100, (k.val / (k.target * 1.6)) * 100)
+              return (
+                <div key={k.label}>
+                  <div className="flex items-center justify-between mb-1">
+                    <div>
+                      <span className="text-xs font-medium text-gray-700">{k.label}</span>
+                      <span className="text-[9px] text-gray-400 mr-1.5">(الهدف {k.targetLbl})</span>
+                    </div>
+                    <span className={`text-xs font-bold font-mono ${good ? 'text-emerald-600' : 'text-red-500'}`}>
+                      {k.val.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-gray-100 overflow-hidden">
+                    <div className={`h-full rounded-full ${good ? 'bg-emerald-400' : 'bg-red-400'}`} style={{ width: `${barW}%` }} />
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 2. FC Analysis ────────────────────────────────────────────────
+function FCReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: { brand: string; month: string; branch?: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start: monthStart, end: monthEnd } = monthRange(month)
+
+    const { data: sales } = await wb(
+      (supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue')
+        .eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd), branch)
+
+    if (!sales || sales.length === 0) { setRows([]); setLoading(false); return }
+
+    // Group by product
+    const productMap = new Map<string, { name: string; qty: number; revenue: number }>()
+    for (const s of sales as any[]) {
+      const key = s.product_sku
+      if (!productMap.has(key)) productMap.set(key, { name: s.product_name, qty: 0, revenue: 0 })
+      const p = productMap.get(key)!
+      p.qty += s.qty_sold
+      p.revenue += s.revenue
+    }
+
+    const skus = [...productMap.keys()]
+    const { data: recipes } = await (supabase.from('recipes') as any)
+      .select('sku, total_cost, yield_portions, food_cost_pct')
+      .eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+
+    const recipeMap = new Map<string, any>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+
+    const result = [...productMap.entries()].map(([sku, p]) => {
+      const rec = recipeMap.get(sku)
+      const revenueExVat = p.revenue / VAT_RATE
+      const theoreticalCostPerUnit = rec ? rec.total_cost / Math.max(rec.yield_portions, 1) : 0
+      const totalTheoreticalCost = theoreticalCostPerUnit * p.qty
+      const actualFcPct = revenueExVat > 0 ? (totalTheoreticalCost / revenueExVat) * 100 : 0
+      const recipeFcPct = rec?.food_cost_pct ?? null
+      return {
+        sku, name: p.name, qty: p.qty,
+        revenue: revenueExVat,
+        theoreticalCost: totalTheoreticalCost,
+        actualFcPct,
+        recipeFcPct,
+        variance: recipeFcPct != null ? actualFcPct - recipeFcPct : null,
+      }
+    }).sort((a, b) => b.revenue - a.revenue)
+
+    setRows(result)
+    setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  const totalRevenue  = rows.reduce((s, r) => s + r.revenue, 0)
+  const totalCost     = rows.reduce((s, r) => s + r.theoreticalCost, 0)
+  const avgFc         = totalRevenue > 0 ? (totalCost / totalRevenue) * 100 : 0
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-4">
+        <KpiCard label="إجمالي الإيراد (قبل VAT)" value={`${totalRevenue.toFixed(0)} ر.س`} color="text-blue-700" />
+        <KpiCard label="تكلفة المواد النظرية" value={`${totalCost.toFixed(0)} ر.س`} color="text-red-600" />
+        <KpiCard label="متوسط Food Cost %" value={`${avgFc.toFixed(1)}%`} color={avgFc <= fcLow ? 'text-green-700' : avgFc <= fcHigh ? 'text-amber-600' : 'text-red-700'} />
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات مبيعات لهذا الشهر</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-left px-4 py-3 font-medium">الإيراد</th>
+                  <th className="text-left px-4 py-3 font-medium">تكلفة المواد</th>
+                  <th className="text-center px-4 py-3 font-medium">FC% (الوصفة)</th>
+                  <th className="text-center px-4 py-3 font-medium">FC% (الفعلي)</th>
+                  <th className="text-center px-4 py-3 font-medium">الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3">
+                      <div className="font-medium text-gray-900">{r.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{r.sku}</div>
+                    </td>
+                    <td className="px-4 py-3 text-center text-gray-600 font-mono">{r.qty}</td>
+                    <td className="px-4 py-3 text-left font-mono text-gray-800">{r.revenue.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-left font-mono text-red-600">{r.theoreticalCost.toFixed(2)}</td>
+                    <td className="px-4 py-3 text-center">
+                      {r.recipeFcPct != null ? (
+                        <span className={`font-mono text-xs font-semibold ${r.recipeFcPct <= fcLow ? 'text-green-600' : r.recipeFcPct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                          {r.recipeFcPct.toFixed(1)}%
+                        </span>
+                      ) : <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`font-mono text-xs font-semibold ${r.actualFcPct <= fcLow ? 'text-green-600' : r.actualFcPct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                        {r.actualFcPct.toFixed(1)}%
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${r.actualFcPct <= fcLow ? 'bg-green-50 text-green-700' : r.actualFcPct <= fcHigh ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
+                        {r.actualFcPct <= fcLow ? 'ممتاز' : r.actualFcPct <= fcHigh ? 'مقبول' : 'مرتفع'}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 3. Break-even ─────────────────────────────────────────────────
+function BreakevenReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start: monthStart, end: monthEnd } = monthRange(month)
+
+    const [{ data: sales }, { data: labor }, { data: overhead }, { data: brandRow }] = await Promise.all([
+      wb((supabase.from('daily_sales') as any).select('revenue, qty_sold, product_sku').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd), branch),
+      (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+      (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+      (supabase.from('brands') as any).select('delivery_commission_pct').eq('id', brand).single(),
+    ])
+
+    const totalRevWithVat = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
+    const totalQty        = (sales || []).reduce((s: number, r: any) => s + r.qty_sold, 0)
+    const revenue         = totalRevWithVat / VAT_RATE
+    const fixedCosts      = [...(labor || []), ...(overhead || [])].reduce((s: number, r: any) => s + r.amount, 0)
+    const commissionPct       = (brandRow as any)?.delivery_commission_pct ?? 0
+    const deliveryCommission  = revenue * commissionPct / 100
+
+    const skus = [...new Set((sales || []).map((s: any) => s.product_sku))]
+    let theoreticalMaterialCost = 0
+
+    if (skus.length > 0) {
+      const { data: recipes } = await (supabase.from('recipes') as any)
+        .select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+      const recipeMap = new Map<string, any>()
+      for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+      for (const s of (sales || []) as any[]) {
+        const rec = recipeMap.get(s.product_sku)
+        if (rec) theoreticalMaterialCost += (rec.total_cost / Math.max(rec.yield_portions, 1)) * s.qty_sold
+      }
+    }
+
+    const avgRevenuePerCover = totalQty > 0 ? revenue / totalQty : 0
+    const avgVarCostPerCover = totalQty > 0 ? (theoreticalMaterialCost + deliveryCommission) / totalQty : 0
+    const contributionMargin = avgRevenuePerCover - avgVarCostPerCover
+    const breakevenCovers    = contributionMargin > 0 ? fixedCosts / contributionMargin : 0
+    const daysInMonth        = parseInt(monthEnd.slice(-2), 10)
+    const breakevenPerDay    = breakevenCovers / daysInMonth
+    const cmRatio            = avgRevenuePerCover > 0 ? (contributionMargin / avgRevenuePerCover) * 100 : 0
+    const breakevenRevenue   = cmRatio > 0 ? (fixedCosts / cmRatio) * 100 : 0
+    const currentFcPct       = revenue > 0 ? (theoreticalMaterialCost / revenue) * 100 : 0
+    const safetyMargin       = revenue > 0 ? ((revenue - breakevenRevenue) / revenue) * 100 : 0
+
+    setData({
+      revenue, totalQty, fixedCosts, theoreticalMaterialCost,
+      deliveryCommission, commissionPct,
+      avgRevenuePerCover, avgVarCostPerCover, contributionMargin,
+      breakevenCovers, breakevenPerDay, cmRatio, breakevenRevenue,
+      currentFcPct, safetyMargin,
+    })
+    setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!data) return null
+
+  const d = data
+  const chartData = [
+    { name: 'إيراد متغير', value: d.avgRevenuePerCover },
+    { name: 'تكلفة متغيرة', value: d.avgVarCostPerCover },
+    { name: 'هامش المساهمة', value: d.contributionMargin },
+  ]
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KpiCard label="التكاليف الثابتة" value={`${d.fixedCosts.toFixed(0)} ر.س`} color="text-red-600" sub="عمالة + تشغيل" />
+        <KpiCard label="هامش المساهمة/وجبة" value={`${d.contributionMargin.toFixed(2)} ر.س`} color="text-blue-700" sub={`نسبة: ${d.cmRatio.toFixed(1)}%`} />
+        <KpiCard label="نقطة التعادل (وجبات)" value={`${Math.ceil(d.breakevenCovers)} وجبة`} color="text-amber-700" sub={`${Math.ceil(d.breakevenPerDay)} وجبة/يوم`} />
+        <KpiCard label="هامش الأمان" value={`${d.safetyMargin.toFixed(1)}%`} color={d.safetyMargin > 20 ? 'text-green-700' : d.safetyMargin > 0 ? 'text-amber-600' : 'text-red-700'} sub={`إيراد التعادل: ${d.breakevenRevenue.toFixed(0)} ر.س`} />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>معادلة نقطة التعادل</SectionTitle>
+          <div className="space-y-3 text-sm">
+            {([
+              { label: 'متوسط الإيراد/وجبة', value: `${d.avgRevenuePerCover.toFixed(2)} ر.س`, color: 'text-blue-700' },
+              { label: 'متوسط التكلفة المتغيرة/وجبة', value: `${d.avgVarCostPerCover.toFixed(2)} ر.س`, color: 'text-red-600' },
+              ...(d.commissionPct > 0 ? [{ label: `منها — عمولات التوصيل (${d.commissionPct}%)/وجبة`, value: `${(d.deliveryCommission / Math.max(d.totalQty, 1)).toFixed(2)} ر.س`, color: 'text-amber-600' }] : []),
+              { label: 'هامش المساهمة/وجبة', value: `${d.contributionMargin.toFixed(2)} ر.س`, color: 'text-emerald-700', bold: true },
+              { label: 'إجمالي التكاليف الثابتة', value: `${d.fixedCosts.toFixed(2)} ر.س`, color: 'text-gray-700' },
+              { label: 'وجبات التعادل (شهري)', value: `${Math.ceil(d.breakevenCovers)} وجبة`, color: 'text-amber-700', bold: true },
+              { label: 'وجبات التعادل (يومي)', value: `${Math.ceil(d.breakevenPerDay)} وجبة`, color: 'text-amber-700', bold: true },
+              { label: 'إيراد التعادل', value: `${d.breakevenRevenue.toFixed(0)} ر.س`, color: 'text-gray-700' },
+              { label: 'الإيراد الفعلي', value: `${d.revenue.toFixed(0)} ر.س`, color: 'text-blue-700' },
+            ] as { label: string; value: string; color: string; bold?: boolean }[]).map((row, i) => (
+              <div key={i} className="flex justify-between items-center py-2 border-b border-gray-100">
+                <span className="text-gray-600">{row.label}</span>
+                <span className={`font-mono font-${row.bold ? 'bold' : 'medium'} ${row.color}`}>{row.value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>هامش المساهمة/وجبة</SectionTitle>
+          <ResponsiveContainer width="100%" height={220}>
+            <BarChart data={chartData} margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(2)} ر.س`]} />
+              <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                {chartData.map((_, i) => <Cell key={i} fill={COLORS[i]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+
+          <div className={`mt-4 rounded-lg p-3 text-sm text-center ${d.safetyMargin > 20 ? 'bg-green-50 text-green-800' : d.safetyMargin > 0 ? 'bg-amber-50 text-amber-800' : 'bg-red-50 text-red-800'}`}>
+            {d.safetyMargin > 20
+              ? `هامش أمان ممتاز — الإيراد يتجاوز نقطة التعادل بـ ${d.safetyMargin.toFixed(1)}%`
+              : d.safetyMargin > 0
+              ? `تحذير — هامش الأمان منخفض (${d.safetyMargin.toFixed(1)}%)`
+              : `خطر — الإيراد الحالي أقل من نقطة التعادل`}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 4. Purchases Analysis ─────────────────────────────────────────
+function PurchasesReport({ brand, month }: { brand: string; month: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start: monthStart, end: monthEnd } = monthRange(month)
+
+    const { data: purchases } = await (supabase.from('purchases') as any)
+      .select('*').eq('brand_id', brand).gte('purchase_date', monthStart).lte('purchase_date', monthEnd)
+
+    if (!purchases || purchases.length === 0) { setData(null); setLoading(false); return }
+
+    const rows = purchases as any[]
+    const total = rows.reduce((s: number, r: any) => s + r.total_price, 0)
+
+    const bySupplier = rows.reduce((acc: any, r: any) => {
+      acc[r.supplier_name] = (acc[r.supplier_name] || 0) + r.total_price
+      return acc
+    }, {})
+
+    const byItem = rows.reduce((acc: any, r: any) => {
+      const key = r.ing_name
+      if (!acc[key]) acc[key] = { name: r.ing_name, sku: r.ing_sku, total: 0, qty: 0, unit: r.unit }
+      acc[key].total += r.total_price
+      acc[key].qty   += r.qty
+      return acc
+    }, {})
+
+    const byDate = rows.reduce((acc: any, r: any) => {
+      const d = r.purchase_date
+      acc[d] = (acc[d] || 0) + r.total_price
+      return acc
+    }, {})
+
+    setData({
+      total,
+      supplierData: Object.entries(bySupplier).map(([name, value]) => ({ name, value: value as number })).sort((a, b) => b.value - a.value),
+      itemData: Object.values(byItem).sort((a: any, b: any) => b.total - a.total).slice(0, 15) as any[],
+      dateData: Object.entries(byDate).sort().map(([date, value]) => ({ date, value: value as number })),
+    })
+    setLoading(false)
+  }, [brand, month])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!data) return <div className="py-16 text-center text-gray-400">لا توجد مشتريات لهذا الشهر</div>
+
+  async function exportExcelPurchases() {
+    startLoading('جارٍ تصدير تقرير المشتريات...')
+    try {
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+      const { data: rows } = await (supabase.from('purchases') as any)
+        .select('purchase_date, supplier_name, ing_name, ing_sku, qty, unit, total_price, unit_cost')
+        .eq('brand_id', brand).gte('purchase_date', start).lte('purchase_date', end)
+        .order('purchase_date')
+      if (!rows?.length) return
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet((rows as any[]).map(r => ({
+        'التاريخ': r.purchase_date, 'المورد': r.supplier_name,
+        'المادة': r.ing_name, 'SKU': r.ing_sku,
+        'الكمية': r.qty, 'الوحدة': r.unit,
+        'الإجمالي (ر.س)': r.total_price, 'تكلفة/وحدة': r.unit_cost,
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 28 }, { wch: 14 }, { wch: 8 }, { wch: 8 }, { wch: 14 }, { wch: 12 }]
+      X.utils.book_append_sheet(wb, ws, 'المشتريات')
+      X.writeFile(wb, `تحليل_المشتريات_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <KpiCard label="إجمالي المشتريات" value={`${data.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} ر.س`} color="text-red-600" sub={`${formatYearMonth(month)}`} />
+        <button onClick={exportExcelPurchases}
+          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium self-start mt-1">
+          ⬇ Excel
+        </button>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>الإنفاق بالمورد</SectionTitle>
+          <ResponsiveContainer width="100%" height={250}>
+            <PieChart>
+              <Pie data={data.supplierData} cx="50%" cy="50%" outerRadius={90} dataKey="value" nameKey="name">
+                {data.supplierData.map((_: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
+              <Legend iconType="circle" iconSize={10} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>الإنفاق اليومي</SectionTitle>
+          <ResponsiveContainer width="100%" height={250}>
+            <LineChart data={data.dateData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
+              <Line type="monotone" dataKey="value" stroke="#ef4444" strokeWidth={2} dot={false} name="الإنفاق" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-200 bg-gray-50">
+          <span className="font-semibold text-gray-900">أعلى الأصناف إنفاقاً</span>
+        </div>
+        <table suppressHydrationWarning className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200 bg-gray-50 text-xs text-gray-500">
+              <th className="text-right px-4 py-2.5 font-medium">#</th>
+              <th className="text-right px-4 py-2.5 font-medium">المادة</th>
+              <th className="text-left px-4 py-2.5 font-medium">الكمية</th>
+              <th className="text-left px-4 py-2.5 font-medium">الإجمالي</th>
+              <th className="text-left px-4 py-2.5 font-medium">النسبة</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.itemData.map((r: any, i: number) => (
+              <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                <td className="px-4 py-2.5 text-gray-400 text-xs">{i + 1}</td>
+                <td className="px-4 py-2.5">
+                  <div className="text-gray-800 font-medium">{r.name}</div>
+                  {r.sku && <div className="text-xs text-gray-400 font-mono">{r.sku}</div>}
+                </td>
+                <td className="px-4 py-2.5 text-left font-mono text-gray-600">{r.qty.toFixed(2)} {r.unit}</td>
+                <td className="px-4 py-2.5 text-left font-mono font-semibold text-red-600">{r.total.toFixed(2)} ر.س</td>
+                <td className="px-4 py-2.5 text-left">
+                  <div className="flex items-center gap-2">
+                    <div className="w-16 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-red-400 rounded-full" style={{ width: `${Math.min((r.total / data.total) * 100, 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500 font-mono">{((r.total / data.total) * 100).toFixed(1)}%</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── 5. Sales Analysis ─────────────────────────────────────────────
+function SalesReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start: monthStart, end: monthEnd } = monthRange(month)
+
+    const { data: sales } = await wb(
+      (supabase.from('daily_sales') as any).select('*').eq('brand_id', brand).gte('sale_date', monthStart).lte('sale_date', monthEnd), branch)
+
+    if (!sales || sales.length === 0) { setData(null); setLoading(false); return }
+
+    const rows = sales as any[]
+    const totalRev  = rows.reduce((s: number, r: any) => s + r.revenue, 0)
+    const totalQty  = rows.reduce((s: number, r: any) => s + r.qty_sold, 0)
+
+    const byDate = rows.reduce((acc: any, r: any) => {
+      if (!acc[r.sale_date]) acc[r.sale_date] = { date: r.sale_date, revenue: 0, qty: 0 }
+      acc[r.sale_date].revenue += r.revenue / VAT_RATE
+      acc[r.sale_date].qty     += r.qty_sold
+      return acc
+    }, {})
+
+    const byProduct = rows.reduce((acc: any, r: any) => {
+      const key = r.product_sku
+      if (!acc[key]) acc[key] = { name: r.product_name, sku: key, revenue: 0, qty: 0 }
+      acc[key].revenue += r.revenue / VAT_RATE
+      acc[key].qty     += r.qty_sold
+      return acc
+    }, {})
+
+    setData({
+      totalRev: totalRev / VAT_RATE, totalRevWithVat: totalRev, totalQty,
+      avgPerCover: totalQty > 0 ? (totalRev / VAT_RATE) / totalQty : 0,
+      dateData: Object.values(byDate).sort((a: any, b: any) => a.date.localeCompare(b.date)),
+      topByRevenue: Object.values(byProduct).sort((a: any, b: any) => b.revenue - a.revenue).slice(0, 10) as any[],
+      topByQty:     Object.values(byProduct).sort((a: any, b: any) => b.qty - a.qty).slice(0, 10) as any[],
+    })
+    setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!data) return <div className="py-16 text-center text-gray-400">لا توجد مبيعات لهذا الشهر</div>
+
+  async function exportExcelSales() {
+    startLoading('جارٍ تصدير تقرير المبيعات...')
+    try {
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+      const { data: rows } = await wb(
+        (supabase.from('daily_sales') as any)
+          .select('sale_date, product_sku, product_name, qty_sold, revenue, cost')
+          .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end)
+          .order('sale_date'), branch)
+      if (!rows?.length) return
+      const X = await import('xlsx')
+      const wbk = X.utils.book_new()
+      const ws = X.utils.json_to_sheet((rows as any[]).map(r => ({
+        'التاريخ': r.sale_date, 'SKU المنتج': r.product_sku, 'اسم المنتج': r.product_name,
+        'الكمية المباعة': r.qty_sold, 'الإيراد (شامل VAT)': r.revenue,
+        'الإيراد (قبل VAT)': (r.revenue / VAT_RATE).toFixed(2), 'التكلفة': r.cost ?? 0,
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 18 }, { wch: 16 }, { wch: 12 }]
+      X.utils.book_append_sheet(wbk, ws, 'المبيعات')
+      X.writeFile(wbk, `تحليل_المبيعات_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 flex-1">
+          <KpiCard label="الإيراد (قبل VAT)" value={`${data.totalRev.toFixed(0)} ر.س`} color="text-green-700" />
+          <KpiCard label="الإيراد (شامل VAT)" value={`${data.totalRevWithVat.toFixed(0)} ر.س`} color="text-gray-700" />
+          <KpiCard label="إجمالي الوجبات" value={`${data.totalQty} وجبة`} color="text-blue-700" />
+          <KpiCard label="متوسط الوجبة" value={`${data.avgPerCover.toFixed(2)} ر.س`} color="text-indigo-700" />
+        </div>
+        <button onClick={exportExcelSales}
+          className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium self-start mt-1">
+          ⬇ Excel
+        </button>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <SectionTitle>الإيراد اليومي (قبل VAT)</SectionTitle>
+        <ResponsiveContainer width="100%" height={220}>
+          <BarChart data={data.dateData} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
+            <Bar dataKey="revenue" fill="#10b981" radius={[4, 4, 0, 0]} name="الإيراد" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {[
+          { title: 'أعلى 10 منتجات بالإيراد', rows: data.topByRevenue, key: 'revenue', unit: 'ر.س', total: data.totalRev },
+          { title: 'أعلى 10 منتجات بالكمية', rows: data.topByQty,     key: 'qty',     unit: 'وجبة', total: data.totalQty },
+        ].map(section => (
+          <div key={section.title} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="px-5 py-4 border-b border-gray-200 bg-gray-50">
+              <span className="font-semibold text-gray-900 text-sm">{section.title}</span>
+            </div>
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-gray-50 text-xs text-gray-500">
+                  <th className="text-right px-4 py-2 font-medium">#</th>
+                  <th className="text-right px-4 py-2 font-medium">المنتج</th>
+                  <th className="text-left px-4 py-2 font-medium">{section.unit}</th>
+                  <th className="text-left px-4 py-2 font-medium">النسبة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {section.rows.map((r: any, i: number) => (
+                  <tr key={i} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-2 text-gray-400 text-xs">{i + 1}</td>
+                    <td className="px-4 py-2 text-gray-800 text-xs">{r.name}</td>
+                    <td className="px-4 py-2 text-left font-mono text-xs font-semibold text-green-700">
+                      {typeof r[section.key] === 'number' ? r[section.key].toFixed(section.key === 'qty' ? 0 : 2) : r[section.key]} {section.key === 'revenue' ? 'ر.س' : ''}
+                    </td>
+                    <td className="px-4 py-2 text-left">
+                      <div className="flex items-center gap-2">
+                        <div className="w-12 h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                          <div className="h-full bg-green-400 rounded-full" style={{ width: `${Math.min((r[section.key] / section.total) * 100, 100)}%` }} />
+                        </div>
+                        <span className="text-xs text-gray-400 font-mono">{((r[section.key] / section.total) * 100).toFixed(1)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ── 6. Menu Engineering ────────────────────────────────────────────
+
+type MenuCategory = 'star' | 'plowhorse' | 'puzzle' | 'dog'
+
+interface MenuItem {
+  sku: string
+  name: string
+  qty: number
+  margin: number
+  fcPct: number
+  category: MenuCategory
+}
+
+const CATEGORY_CONFIG: Record<MenuCategory, { label: string; color: string; bg: string; desc: string }> = {
+  star:       { label: 'نجم ⭐',   color: '#16a34a', bg: '#f0fdf4', desc: 'ربحية عالية + إقبال عالٍ' },
+  plowhorse:  { label: 'حصان 🐎', color: '#d97706', bg: '#fffbeb', desc: 'ربحية منخفضة + إقبال عالٍ' },
+  puzzle:     { label: 'لغز ❓',   color: '#2563eb', bg: '#eff6ff', desc: 'ربحية عالية + إقبال منخفض' },
+  dog:        { label: 'كلب 🐕',   color: '#dc2626', bg: '#fef2f2', desc: 'ربحية منخفضة + إقبال منخفض' },
+}
+
+function MenuEngineering({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: { brand: string; month: string; branch?: string; fcLow?: number; fcHigh?: number }) {
+  const [items, setItems] = useState<MenuItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [avgQty, setAvgQty] = useState(0)
+  const [avgMarginPct, setAvgMarginPct] = useState(0)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const [{ data: sales }, { data: recipes }] = await Promise.all([
+      wb((supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold')
+        .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch),
+      (supabase.from('recipes') as any)
+        .select('sku, product_name, food_cost_pct, margin, sell_price, total_cost')
+        .eq('brand_id', brand).eq('is_active', true),
+    ])
+
+    const saleMap = new Map<string, { name: string; qty: number }>()
+    for (const s of (sales || []) as any[]) {
+      const ex = saleMap.get(s.product_sku)
+      if (ex) ex.qty += s.qty_sold
+      else saleMap.set(s.product_sku, { name: s.product_name, qty: s.qty_sold })
+    }
+
+    const recipeMap = new Map<string, any>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+
+    const raw: { qty: number; margin: number; fcPct: number; sku: string; name: string }[] = []
+    for (const [sku, sale] of saleMap) {
+      const r = recipeMap.get(sku)
+      if (!r) continue
+      raw.push({ sku, name: sale.name, qty: sale.qty, margin: r.margin, fcPct: r.food_cost_pct })
+    }
+
+    if (!raw.length) { setItems([]); setLoading(false); return }
+
+    const meanQty = raw.reduce((s, i) => s + i.qty, 0) / raw.length
+    const meanPct = raw.reduce((s, i) => s + i.fcPct, 0) / raw.length
+    setAvgQty(meanQty); setAvgMarginPct(meanPct)
+
+    const classified: MenuItem[] = raw.map(i => {
+      const hiQty = i.qty >= meanQty
+      const hiMargin = i.fcPct <= meanPct // lower FC% = better margin
+      const category: MenuCategory = hiQty && hiMargin ? 'star' : hiQty ? 'plowhorse' : hiMargin ? 'puzzle' : 'dog'
+      return { ...i, category }
+    })
+    classified.sort((a, b) => b.qty - a.qty)
+    setItems(classified); setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="flex items-center justify-center h-48 text-gray-400 text-sm">جارٍ التحليل...</div>
+  if (!items.length) return <div className="flex items-center justify-center h-48 text-gray-400 text-sm">لا توجد بيانات مبيعات أو وصفات نشطة لهذا الشهر</div>
+
+  const counts = { star: 0, plowhorse: 0, puzzle: 0, dog: 0 }
+  items.forEach(i => counts[i.category]++)
+
+  const scatterData = items.map(i => ({ x: i.qty, y: i.fcPct, name: i.name, fill: CATEGORY_CONFIG[i.category].color }))
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">هندسة القائمة (Menu Engineering)</h2>
+        <p className="text-xs text-gray-500 mt-0.5">تحليل {items.length} منتج · المتوسطات: {Math.round(avgQty)} مبيعة · FC% {avgMarginPct.toFixed(1)}%</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {(Object.keys(CATEGORY_CONFIG) as MenuCategory[]).map(cat => (
+          <div key={cat} className="rounded-xl border p-4 text-center" style={{ background: CATEGORY_CONFIG[cat].bg, borderColor: CATEGORY_CONFIG[cat].color + '40' }}>
+            <div className="text-2xl font-bold" style={{ color: CATEGORY_CONFIG[cat].color }}>{counts[cat]}</div>
+            <div className="text-sm font-semibold mt-1" style={{ color: CATEGORY_CONFIG[cat].color }}>{CATEGORY_CONFIG[cat].label}</div>
+            <div className="text-xs text-gray-500 mt-0.5">{CATEGORY_CONFIG[cat].desc}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="text-xs text-gray-500 mb-3">المحور الأفقي: الكمية المباعة · المحور الرأسي: FC% (أقل = أفضل)</div>
+        <ResponsiveContainer width="100%" height={320}>
+          <ScatterChart margin={{ top: 10, right: 30, bottom: 20, left: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="x" name="المبيعات" type="number" tick={{ fontSize: 11 }} label={{ value: 'الكمية المباعة', position: 'insideBottom', offset: -10, fontSize: 11 }} />
+            <YAxis dataKey="y" name="FC%" type="number" unit="%" tick={{ fontSize: 11 }} />
+            <ZAxis range={[60, 60]} />
+            <Tooltip content={({ payload }) => {
+              if (!payload?.length) return null
+              const d = payload[0]?.payload as any
+              return (
+                <div className="bg-white border border-gray-200 rounded-lg p-3 text-xs shadow-lg">
+                  <div className="font-semibold text-gray-900 mb-1">{d.name}</div>
+                  <div className="text-gray-600">مبيعات: <span className="font-mono font-bold">{d.x}</span></div>
+                  <div className="text-gray-600">FC%: <span className="font-mono font-bold">{d.y?.toFixed(1)}%</span></div>
+                </div>
+              )
+            }} />
+            <ReferenceLine x={avgQty} stroke="#94a3b8" strokeDasharray="4 4" />
+            <ReferenceLine y={avgMarginPct} stroke="#94a3b8" strokeDasharray="4 4" />
+            <Scatter data={scatterData} fill="#3b82f6">
+              {scatterData.map((entry, i) => <Cell key={i} fill={entry.fill} />)}
+            </Scatter>
+          </ScatterChart>
+        </ResponsiveContainer>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <table suppressHydrationWarning className="w-full text-sm">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+              <th className="text-right px-4 py-3 font-medium">المنتج</th>
+              <th className="px-4 py-3 font-medium text-center">المبيعات</th>
+              <th className="px-4 py-3 font-medium text-center">FC%</th>
+              <th className="px-4 py-3 font-medium text-center">هامش</th>
+              <th className="px-4 py-3 font-medium text-center">التصنيف</th>
+              <th className="px-4 py-3 font-medium text-right">التوصية</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item, i) => {
+              const cfg = CATEGORY_CONFIG[item.category]
+              const rec = item.category === 'star' ? 'حافظ عليه وروّج له'
+                : item.category === 'plowhorse' ? 'أعد التسعير أو قلّل التكلفة'
+                : item.category === 'puzzle' ? 'روّج له أو غيّر مكانه في القائمة'
+                : 'راجع إبقاءه في القائمة'
+              return (
+                <tr key={item.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium text-gray-900">{item.name}</div>
+                    <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono font-bold text-gray-900">{item.qty.toLocaleString()}</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-semibold ${item.fcPct <= fcLow ? 'text-green-600' : item.fcPct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                    {item.fcPct.toFixed(1)}%
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{item.margin.toFixed(2)} ر.س</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ color: cfg.color, background: cfg.bg }}>{cfg.label}</span>
+                  </td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500">{rec}</td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── 7. Variance Report: النظري vs الصافي vs POS ───────────────────
+
+function VarianceReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: { brand: string; month: string; branch?: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [hasPosData, setHasPosData] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const { data: sales } = await wb(
+      (supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue, cost_pos, discount_amount, return_amount')
+        .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch)
+
+    if (!sales?.length) { setRows([]); setLoading(false); return }
+
+    const map = new Map<string, { name: string; qty: number; revenue: number; costPos: number; discount: number; returnAmt: number }>()
+    let anyPos = false
+    for (const s of sales as any[]) {
+      const ex = map.get(s.product_sku)
+      if (ex) {
+        ex.qty += s.qty_sold; ex.revenue += s.revenue
+        ex.costPos += s.cost_pos ?? 0; ex.discount += s.discount_amount ?? 0
+        ex.returnAmt += s.return_amount ?? 0
+      } else {
+        map.set(s.product_sku, { name: s.product_name, qty: s.qty_sold, revenue: s.revenue, costPos: s.cost_pos ?? 0, discount: s.discount_amount ?? 0, returnAmt: s.return_amount ?? 0 })
+      }
+      if ((s.cost_pos ?? 0) > 0) anyPos = true
+    }
+    setHasPosData(anyPos)
+
+    const skus = [...map.keys()]
+    const { data: recipes } = await (supabase.from('recipes') as any)
+      .select('sku, total_cost, yield_portions').eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+
+    const recipeMap = new Map<string, number>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r.total_cost / Math.max(r.yield_portions, 1))
+
+    // Fetch modifier_sales overlapping this month and add their ingredient costs to theoretical consumption
+    const { data: modSales } = await (supabase.from('modifier_sales') as any)
+      .select('option_sku, product_sku, qty_sold')
+      .eq('brand_id', brand)
+      .lte('date_from', end)
+      .gte('date_to', start)
+
+    const modCostPerProduct = new Map<string, number>()
+    const modSalesList = (modSales || []) as any[]
+    if (modSalesList.length > 0) {
+      const optionSkus = [...new Set(modSalesList.map((r: any) => r.option_sku as string))]
+      const { data: modOptions } = await (supabase.from('modifier_options') as any)
+        .select('option_sku, total_cost').eq('brand_id', brand).in('option_sku', optionSkus)
+      const modOptionCostMap = new Map<string, number>()
+      for (const opt of (modOptions || []) as any[]) modOptionCostMap.set(opt.option_sku, opt.total_cost ?? 0)
+      for (const sale of modSalesList) {
+        const optCost = modOptionCostMap.get(sale.option_sku) ?? 0
+        if (optCost <= 0) continue
+        modCostPerProduct.set(sale.product_sku, (modCostPerProduct.get(sale.product_sku) ?? 0) + optCost * sale.qty_sold)
+      }
+    }
+
+    const result = [...map.entries()].map(([sku, p]) => {
+      const cpUnit = recipeMap.get(sku) ?? null
+      const rev = p.revenue / VAT_RATE
+      const netRev = Math.max(0, (p.revenue - p.discount - p.returnAmt) / VAT_RATE)
+      const recipeCost = cpUnit != null ? cpUnit * p.qty : null
+      const modCost    = modCostPerProduct.get(sku) ?? 0
+      const thCost     = recipeCost != null ? recipeCost + modCost : (modCost > 0 ? modCost : null)
+      return {
+        sku, name: p.name, qty: p.qty,
+        rev, netRev, discount: p.discount, returnAmt: p.returnAmt,
+        costPos: p.costPos,
+        fcTh:  thCost != null && rev > 0 ? (thCost / rev) * 100 : null,
+        fcNet: thCost != null && netRev > 0 ? (thCost / netRev) * 100 : null,
+        fcPos: p.costPos > 0 && rev > 0 ? (p.costPos / rev) * 100 : null,
+      }
+    }).sort((a, b) => b.rev - a.rev)
+
+    setRows(result); setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length) return <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات مبيعات لهذا الشهر</div>
+
+  const totalRev    = rows.reduce((s, r) => s + r.rev, 0)
+  const totalNetRev = rows.reduce((s, r) => s + r.netRev, 0)
+  const totalThCost = rows.reduce((s, r) => s + (r.fcTh != null ? (r.fcTh / 100) * r.rev : 0), 0)
+  const totalPos    = rows.reduce((s, r) => s + r.costPos, 0)
+  const totalDisc   = rows.reduce((s, r) => s + r.discount, 0)
+  const totalRet    = rows.reduce((s, r) => s + r.returnAmt, 0)
+
+  const avgTh  = totalRev > 0 ? (totalThCost / totalRev) * 100 : 0
+  const avgNet = totalNetRev > 0 ? (totalThCost / totalNetRev) * 100 : 0
+  const avgPos = hasPosData && totalRev > 0 ? (totalPos / totalRev) * 100 : null
+
+  const fc = (v: number | null) => v == null ? 'text-gray-300' : v <= fcLow ? 'text-green-600' : v <= fcHigh ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">مقارنة FC% — النظري vs الصافي vs POS</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          الخصومات: {totalDisc.toFixed(0)} ر.س · المرتجعات: {totalRet.toFixed(0)} ر.س
+          {!hasPosData && ' · تكلفة POS غير متوفرة (تحتاج استيراد Foodics)'}
+        </p>
+      </div>
+
+      <div className={`grid gap-4 ${hasPosData ? 'grid-cols-3' : 'grid-cols-2'}`}>
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="text-xs text-gray-500 mb-1">FC% نظري</div>
+          <div className={`text-2xl font-bold font-mono ${fc(avgTh)}`}>{avgTh.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-1">تكلفة الوصفة ÷ الإيراد الإجمالي</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <div className="text-xs text-gray-500 mb-1">FC% صافي</div>
+          <div className={`text-2xl font-bold font-mono ${fc(avgNet)}`}>{avgNet.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-1">بعد خصم الخصومات والمرتجعات</div>
+        </div>
+        {hasPosData && (
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <div className="text-xs text-gray-500 mb-1">FC% من POS</div>
+            <div className={`text-2xl font-bold font-mono ${fc(avgPos)}`}>{avgPos?.toFixed(1)}%</div>
+            <div className="text-xs text-gray-400 mt-1">تكلفة Foodics المباشرة</div>
+          </div>
+        )}
+      </div>
+
+      {hasPosData && avgPos != null && (
+        <div className={`rounded-xl px-4 py-3 text-sm border flex items-center gap-2 ${Math.abs(avgPos - avgTh) > 3 ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-green-50 border-green-200 text-green-800'}`}>
+          <span>{Math.abs(avgPos - avgTh) > 3 ? '⚠️' : '✅'}</span>
+          <span>الفرق بين FC% النظري والـ POS: <strong>{(avgPos - avgTh).toFixed(1)}%</strong>
+            {Math.abs(avgPos - avgTh) > 3 ? ' — فجوة تستحق المراجعة (هدر غير مسجّل أو خطأ في التكاليف)' : ' — الفرق ضمن الحدود المقبولة'}
+          </span>
+        </div>
+      )}
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                <th className="px-4 py-3 font-medium text-center">الكمية</th>
+                <th className="px-4 py-3 font-medium text-center">الإيراد</th>
+                <th className="px-4 py-3 font-medium text-center bg-blue-50 text-blue-700">FC% نظري</th>
+                <th className="px-4 py-3 font-medium text-center bg-amber-50 text-amber-700">FC% صافي</th>
+                {hasPosData && <th className="px-4 py-3 font-medium text-center bg-green-50 text-green-700">FC% POS</th>}
+                {hasPosData && <th className="px-4 py-3 font-medium text-center">الفرق</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => {
+                const diff = r.fcPos != null && r.fcTh != null ? r.fcPos - r.fcTh : null
+                return (
+                  <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900">{r.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{r.sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.rev.toFixed(0)}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcTh)}`}>{r.fcTh != null ? `${r.fcTh.toFixed(1)}%` : <span className="text-gray-300 text-xs">لا وصفة</span>}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcNet)}`}>{r.fcNet != null ? `${r.fcNet.toFixed(1)}%` : '—'}</td>
+                    {hasPosData && <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcPos)}`}>{r.fcPos != null ? `${r.fcPos.toFixed(1)}%` : <span className="text-gray-300 text-xs">—</span>}</td>}
+                    {hasPosData && (
+                      <td className={`px-4 py-2.5 text-center font-mono font-semibold text-sm ${diff == null ? 'text-gray-300' : Math.abs(diff) > 3 ? (diff > 0 ? 'text-red-600' : 'text-green-600') : 'text-gray-500'}`}>
+                        {diff != null ? `${diff >= 0 ? '+' : ''}${diff.toFixed(1)}%` : '—'}
+                      </td>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 8. Prime Cost Report ──────────────────────────────────────────
+
+function PrimeCostReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: { brand: string; month: string; branch?: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [summary, setSummary] = useState<{ laborPct: number; overheadPct: number; totalRev: number } | null>(null)
+  const [loading, setLoading] = useState(true)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    const supabase = createClient()
+    const { start, end } = monthRange(month)
+
+    const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+      wb((supabase.from('daily_sales') as any).select('product_sku, product_name, qty_sold, revenue').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch),
+      (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+      (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', month),
+    ])
+
+    if (!sales?.length) { setRows([]); setLoading(false); return }
+
+    const map = new Map<string, { name: string; qty: number; revenue: number }>()
+    for (const s of sales as any[]) {
+      const ex = map.get(s.product_sku)
+      if (ex) { ex.qty += s.qty_sold; ex.revenue += s.revenue }
+      else map.set(s.product_sku, { name: s.product_name, qty: s.qty_sold, revenue: s.revenue })
+    }
+
+    const totalRevExVat = [...map.values()].reduce((s, p) => s + p.revenue / VAT_RATE, 0)
+    const totalLabor    = (labor    || []).reduce((s: number, r: any) => s + r.amount, 0)
+    const totalOverhead = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
+    const laborPct    = totalRevExVat > 0 ? (totalLabor    / totalRevExVat) * 100 : 0
+    const overheadPct = totalRevExVat > 0 ? (totalOverhead / totalRevExVat) * 100 : 0
+    setSummary({ laborPct, overheadPct, totalRev: totalRevExVat })
+
+    const skus = [...map.keys()]
+    const { data: recipes } = await (supabase.from('recipes') as any)
+      .select('sku, total_cost, yield_portions, food_cost_pct, sell_price')
+      .eq('brand_id', brand).eq('is_active', true).in('sku', skus)
+
+    const recipeMap = new Map<string, any>()
+    for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r)
+
+    const result = [...map.entries()].map(([sku, p]) => {
+      const rec = recipeMap.get(sku)
+      if (!rec) return null
+      const revExVat = p.revenue / VAT_RATE
+      const fcPct = rec.food_cost_pct as number
+      const primeCostPct = fcPct + laborPct          // Prime Cost = FC + Labor (لا Overhead)
+      const totalCostPct = primeCostPct + overheadPct
+      const sellExVat = (rec.sell_price as number) / VAT_RATE
+      const fcPerUnit = (rec.total_cost as number) / Math.max(rec.yield_portions, 1)
+      const opMargin = sellExVat - fcPerUnit - (laborPct / 100) * sellExVat - (overheadPct / 100) * sellExVat
+      return { sku, name: p.name, qty: p.qty, revExVat, fcPct, laborPct, overheadPct, primeCostPct, totalCostPct, opMarginPct: 100 - totalCostPct, opMargin }
+    }).filter(Boolean).sort((a: any, b: any) => a.opMarginPct - b.opMarginPct)
+
+    setRows(result as any[]); setLoading(false)
+  }, [brand, month, branch])
+
+  useEffect(() => { load() }, [load])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length || !summary) return (
+    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+      لا توجد بيانات. تأكد من إدخال تكاليف العمالة والتكاليف الثابتة في صفحة التكاليف لهذا الشهر.
+    </div>
+  )
+
+  const avgFc       = rows.reduce((s, r) => s + r.fcPct * r.revExVat, 0) / Math.max(summary.totalRev, 1)
+  const avgOpMargin = 100 - avgFc - summary.laborPct - summary.overheadPct
+  const clr = (v: number) => v >= 20 ? 'text-green-600' : v >= 10 ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">التكلفة الإجمالية (Prime Cost)</h2>
+        <p className="text-xs text-gray-500 mt-0.5">توزيع تكاليف العمالة والتشغيل على كل منتج بنسبة إيراده</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'Food Cost', val: avgFc, color: 'blue' },
+          { label: 'العمالة', val: summary.laborPct, color: 'purple' },
+          { label: 'التكاليف الثابتة', val: summary.overheadPct, color: 'amber' },
+        ].map(({ label, val, color }) => (
+          <div key={label} className={`bg-${color}-50 border border-${color}-100 rounded-xl p-4 text-center`}>
+            <div className={`text-xs text-${color}-600 mb-1`}>{label}</div>
+            <div className={`text-2xl font-bold font-mono text-${color}-700`}>{val.toFixed(1)}%</div>
+          </div>
+        ))}
+        <div className={`border rounded-xl p-4 text-center ${avgOpMargin >= 20 ? 'bg-green-50 border-green-100' : avgOpMargin >= 10 ? 'bg-amber-50 border-amber-100' : 'bg-red-50 border-red-100'}`}>
+          <div className={`text-xs mb-1 ${clr(avgOpMargin)}`}>هامش التشغيل</div>
+          <div className={`text-2xl font-bold font-mono ${clr(avgOpMargin)}`}>{avgOpMargin.toFixed(1)}%</div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <div className="text-xs text-gray-500 mb-3">تركيب التكلفة الإجمالية</div>
+        <div className="flex h-8 rounded-lg overflow-hidden gap-px">
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${avgFc}%`, background: '#3b82f6' }}>FC {avgFc.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${summary.laborPct}%`, background: '#8b5cf6' }}>عمالة {summary.laborPct.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium" style={{ width: `${summary.overheadPct}%`, background: '#f59e0b' }}>ثابتة {summary.overheadPct.toFixed(0)}%</div>
+          <div className="flex items-center justify-center text-xs text-white font-medium flex-1" style={{ background: '#10b981' }}>هامش {avgOpMargin.toFixed(0)}%</div>
+        </div>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                <th className="px-4 py-3 font-medium text-center">الكمية</th>
+                <th className="px-4 py-3 font-medium text-center bg-blue-50 text-blue-700">FC%</th>
+                <th className="px-4 py-3 font-medium text-center bg-purple-50 text-purple-700">عمالة%</th>
+                <th className="px-4 py-3 font-medium text-center bg-amber-50 text-amber-700">ثابتة%</th>
+                <th className="px-4 py-3 font-medium text-center">Prime Cost%</th>
+                <th className="px-4 py-3 font-medium text-center">هامش التشغيل%</th>
+                <th className="px-4 py-3 font-medium text-center">هامش / وحدة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium text-gray-900">{r.name}</div>
+                    <div className="text-xs text-gray-400 font-mono">{r.sku}</div>
+                  </td>
+                  <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toLocaleString()}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-blue-600 font-semibold">{r.fcPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-purple-600">{r.laborPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm text-amber-600">{r.overheadPct.toFixed(1)}%</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-sm font-semibold text-gray-700">{r.primeCostPct.toFixed(1)}%</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-sm font-bold ${clr(r.opMarginPct)}`}>{r.opMarginPct.toFixed(1)}%</td>
+                  <td className={`px-4 py-2.5 text-center font-mono text-xs ${clr(r.opMarginPct)}`}>{r.opMargin.toFixed(2)} ر.س</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="text-xs text-gray-400">* العمالة والتكاليف الثابتة موزّعة بنسبة إيراد كل منتج. مرتّب من الأقل هامشاً للأعلى.</p>
+    </div>
+  )
+}
+
+// ── 9. Reverse Pricing Tool ───────────────────────────────────────
+
+function ReversePricingTool({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow?: number; fcHigh?: number }) {
+  const [recipes, setRecipes] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [selectedSku, setSelectedSku] = useState('')
+  const [targetFc, setTargetFc] = useState(fcLow)
+  const [applying, setApplying] = useState(false)
+  const [applyMsg, setApplyMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  useEffect(() => {
+    const load = async () => {
+      const supabase = createClient()
+      const { data } = await (supabase.from('recipes') as any)
+        .select('sku, product_name, total_cost, yield_portions, sell_price, food_cost_pct, app_price, is_active')
+        .eq('brand_id', brand).eq('is_active', true).order('product_name')
+      setRecipes(data || [])
+      if (data?.length) setSelectedSku(data[0].sku)
+      setLoading(false)
+    }
+    load()
+  }, [brand])
+
+  const selected = recipes.find(r => r.sku === selectedSku)
+  const costPerPortion = selected ? selected.total_cost / Math.max(selected.yield_portions, 1) : 0
+
+  async function applyPrice() {
+    if (!selected || suggestedPrice <= 0) return
+    setApplying(true); setApplyMsg(null)
+    const supabase = createClient()
+    const newSellWithVat = Math.round(suggestedPriceWithVat * 100) / 100
+    const newSellExVat   = newSellWithVat / VAT_RATE
+    const newFcPct       = newSellExVat > 0 ? Math.round((costPerPortion / newSellExVat) * 10000) / 100 : 0
+    const newMargin      = Math.round((newSellExVat - costPerPortion) * 10000) / 10000
+
+    const [{ error: prodErr }, { error: recipeErr }] = await Promise.all([
+      (supabase.from('products') as any)
+        .update({ price: newSellWithVat })
+        .eq('brand_id', brand).eq('sku', selected.sku),
+      (supabase.from('recipes') as any)
+        .update({ sell_price: newSellWithVat, food_cost_pct: newFcPct, margin: newMargin })
+        .eq('brand_id', brand).eq('sku', selected.sku).eq('is_active', true),
+    ])
+    if (prodErr || recipeErr) {
+      setApplyMsg({ ok: false, text: (prodErr || recipeErr)!.message })
+      setApplying(false); return
+    }
+    setApplyMsg({ ok: true, text: `تم تحديث سعر "${selected.product_name}" إلى ${newSellWithVat.toFixed(2)} ر.س ✓` })
+    setApplying(false)
+  }
+  const suggestedPrice = targetFc > 0 ? costPerPortion / (targetFc / 100) : 0
+  const suggestedPriceWithVat = suggestedPrice * VAT_RATE
+  const currentSellExVat = selected ? selected.sell_price / VAT_RATE : 0
+  const priceDiff = suggestedPrice - currentSellExVat
+
+  const benchmarks = [25, 30, 35, 40, 45]
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!recipes.length) return <div className="py-16 text-center text-gray-400">لا توجد وصفات نشطة</div>
+
+  const inputCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">أداة التسعير العكسي</h2>
+        <p className="text-xs text-gray-500 mt-0.5">أدخل نسبة Food Cost المستهدفة واحصل على سعر البيع المقترح</p>
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">المنتج</label>
+              <select value={selectedSku} onChange={e => setSelectedSku(e.target.value)} className={`${inputCls} w-full`}>
+                {recipes.map(r => <option key={r.sku} value={r.sku}>{r.product_name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">نسبة Food Cost المستهدفة (%)</label>
+              <div className="flex items-center gap-3">
+                <input
+                  type="range" min={10} max={60} step={0.5}
+                  value={targetFc} onChange={e => setTargetFc(Number(e.target.value))}
+                  className="flex-1"
+                />
+                <input
+                  type="number" min={1} max={100} step={0.5}
+                  value={targetFc} onChange={e => setTargetFc(Number(e.target.value))}
+                  className={`${inputCls} w-20 text-center`}
+                />
+                <span className="text-sm text-gray-500">%</span>
+              </div>
+            </div>
+          </div>
+
+          {selected && (
+            <div className="space-y-3">
+              <div className="bg-gray-50 rounded-xl p-4 space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">تكلفة الوصفة/وحدة</span>
+                  <span className="font-mono font-semibold">{costPerPortion.toFixed(3)} ر.س</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">FC% الحالي</span>
+                  <span className={`font-mono font-semibold ${selected.food_cost_pct <= fcLow ? 'text-green-600' : selected.food_cost_pct <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                    {selected.food_cost_pct.toFixed(1)}%
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">السعر الحالي (قبل VAT)</span>
+                  <span className="font-mono text-gray-700">{currentSellExVat.toFixed(2)} ر.س</span>
+                </div>
+                <hr className="border-gray-200" />
+                <div className="flex justify-between items-center">
+                  <span className="font-semibold text-gray-800">السعر المقترح (قبل VAT)</span>
+                  <span className="font-mono font-bold text-blue-700 text-lg">{suggestedPrice.toFixed(2)} ر.س</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500 text-xs">السعر المقترح (شامل VAT 15%)</span>
+                  <span className="font-mono font-semibold text-blue-600">{suggestedPriceWithVat.toFixed(2)} ر.س</span>
+                </div>
+                <div className={`flex justify-between text-xs mt-1 pt-1 border-t border-gray-100 ${priceDiff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  <span>الفرق عن السعر الحالي</span>
+                  <span className="font-mono font-semibold">{priceDiff >= 0 ? '+' : ''}{priceDiff.toFixed(2)} ر.س</span>
+                </div>
+                <button onClick={applyPrice} disabled={applying || suggestedPrice <= 0}
+                  className="mt-3 w-full py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white text-xs font-medium rounded-lg transition-colors">
+                  {applying ? 'جارٍ التطبيق...' : `تطبيق السعر ${suggestedPriceWithVat.toFixed(2)} ر.س على المنتج`}
+                </button>
+                {applyMsg && (
+                  <div className={`text-xs mt-2 px-2 py-1.5 rounded-lg ${applyMsg.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                    {applyMsg.text}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {selected && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-200 bg-gray-50">
+            <span className="font-semibold text-gray-900 text-sm">جدول السعر المقترح عند نسب FC% مختلفة</span>
+          </div>
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50 text-xs text-gray-500">
+                <th className="text-center px-4 py-2.5 font-medium">FC% المستهدف</th>
+                <th className="text-center px-4 py-2.5 font-medium">سعر البيع (قبل VAT)</th>
+                <th className="text-center px-4 py-2.5 font-medium">سعر البيع (شامل VAT)</th>
+                <th className="text-center px-4 py-2.5 font-medium">الفرق عن الحالي</th>
+                <th className="text-center px-4 py-2.5 font-medium">هامش الوحدة</th>
+              </tr>
+            </thead>
+            <tbody>
+              {benchmarks.map(fc => {
+                const price = costPerPortion / (fc / 100)
+                const priceVat = price * VAT_RATE
+                const diff = price - currentSellExVat
+                const margin = price - costPerPortion
+                const isTarget = Math.abs(fc - targetFc) < 0.01
+                return (
+                  <tr key={fc} className={`border-b border-gray-100 last:border-0 ${isTarget ? 'bg-blue-50' : ''}`}>
+                    <td className={`px-4 py-2.5 text-center font-mono font-bold ${fc <= fcLow ? 'text-green-600' : fc <= fcHigh ? 'text-amber-600' : 'text-red-600'}`}>
+                      {fc}% {isTarget && <span className="text-xs text-blue-600 ml-1">← الهدف</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono font-semibold text-gray-900">{price.toFixed(2)} ر.س</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600">{priceVat.toFixed(2)} ر.س</td>
+                    <td className={`px-4 py-2.5 text-center font-mono text-sm font-semibold ${diff >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {diff >= 0 ? '+' : ''}{diff.toFixed(2)} ر.س
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600">{margin.toFixed(2)} ر.س</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 10. Trends Report ─────────────────────────────────────────────
+
+function TrendsReport({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [nMonths, setNMonths] = useState(6)
+
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const months = lastNMonths(nMonths)
+      const rangeStart = monthRange(months[months.length - 1]).start
+      const rangeEnd   = monthRange(months[0]).end
+
+      // 3 queries: use daily_sales.cost as COGS (not purchases) for accurate FC%
+      const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+        (supabase.from('daily_sales') as any).select('sale_date, revenue, cost').eq('brand_id', brand).gte('sale_date', rangeStart).lte('sale_date', rangeEnd).limit(10000),
+        (supabase.from('labor_costs') as any).select('month, amount').eq('brand_id', brand).in('month', months),
+        (supabase.from('overhead_costs') as any).select('month, amount').eq('brand_id', brand).in('month', months),
+      ])
+      if (cancelled) return
+
+      // Group by month key (YYYY-MM)
+      const revMap  = new Map<string, number>()
+      const matMap  = new Map<string, number>()
+      const labMap  = new Map<string, number>()
+      const ovhMap  = new Map<string, number>()
+
+      for (const r of (sales || []) as any[]) {
+        const m = r.sale_date.slice(0, 7)
+        revMap.set(m, (revMap.get(m) ?? 0) + (r.revenue ?? 0))
+        matMap.set(m, (matMap.get(m) ?? 0) + (r.cost ?? 0))
+      }
+      for (const r of (labor || []) as any[])
+        labMap.set(r.month, (labMap.get(r.month) ?? 0) + r.amount)
+      for (const r of (overhead || []) as any[])
+        ovhMap.set(r.month, (ovhMap.get(r.month) ?? 0) + r.amount)
+
+      const results = months.map(m => {
+        const rev = (revMap.get(m) ?? 0) / VAT_RATE
+        const mat = matMap.get(m) ?? 0
+        const lab = labMap.get(m) ?? 0
+        const ovh = ovhMap.get(m) ?? 0
+        return {
+          month: formatYearMonth(m), rev, mat, lab, ovh,
+          fcPct:       rev > 0 ? (mat / rev) * 100 : 0,
+          laborPct:    rev > 0 ? (lab / rev) * 100 : 0,
+          overheadPct: rev > 0 ? (ovh / rev) * 100 : 0,
+          netMargin:   rev > 0 ? ((rev - mat - lab - ovh) / rev) * 100 : 0,
+        }
+      }).reverse()
+
+      setRows(results)
+      setLoading(false)
+    }
+    load()
+    return () => { cancelled = true }
+  }, [brand, nMonths])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  const hasData = rows.some(r => r.rev > 0)
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقارير الاتجاه — آخر {nMonths} أشهر</h2>
+          <p className="text-xs text-gray-500 mt-0.5">مقارنة FC% والإيراد وهامش الربح الصافي عبر الزمن</p>
+        </div>
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[3, 6, 12].map(n => (
+            <button key={n} onClick={() => setNMonths(n)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${nMonths === n ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {n} أشهر
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {!hasData ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات كافية للعرض</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-gray-500 mb-3">الإيراد الشهري (قبل VAT) — ر.س</p>
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={rows} margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
+                  <Bar dataKey="rev" fill="#3b82f6" radius={[4, 4, 0, 0]} name="الإيراد" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <p className="text-xs font-medium text-gray-500 mb-3">اتجاه النسب الشهرية (%)</p>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={rows} margin={{ top: 0, right: 10, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+                  <YAxis tick={{ fontSize: 11 }} unit="%" />
+                  <Tooltip formatter={(v) => [`${Number(v).toFixed(1)}%`]} />
+                  <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
+                  <Line type="monotone" dataKey="fcPct"       name="FC%"        stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="laborPct"    name="عمالة%"     stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="overheadPct" name="تشغيل%"     stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="netMargin"   name="هامش صافي%" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="4 4" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table suppressHydrationWarning className="w-full text-sm">
+                <thead>
+                  <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                    <th className="text-right px-4 py-3 font-medium">الشهر</th>
+                    <th className="text-left px-4 py-3 font-medium">الإيراد</th>
+                    <th className="text-left px-4 py-3 font-medium">المشتريات</th>
+                    <th className="text-center px-4 py-3 font-medium text-red-600">FC%</th>
+                    <th className="text-center px-4 py-3 font-medium text-purple-600">عمالة%</th>
+                    <th className="text-center px-4 py-3 font-medium text-amber-600">تشغيل%</th>
+                    <th className="text-center px-4 py-3 font-medium text-green-600">هامش صافي%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((r, i) => (
+                    <tr key={i} className="border-b border-gray-100 last:border-0 hover:bg-gray-50">
+                      <td className="px-4 py-2.5 font-medium text-gray-900">{r.month}</td>
+                      <td className="px-4 py-2.5 font-mono text-blue-700">{r.rev > 0 ? `${r.rev.toFixed(0)} ر.س` : '—'}</td>
+                      <td className="px-4 py-2.5 font-mono text-red-600">{r.mat > 0 ? `${r.mat.toFixed(0)} ر.س` : '—'}</td>
+                      <td className={`px-4 py-2.5 text-center font-mono font-semibold ${r.fcPct <= fcLow ? 'text-green-600' : r.fcPct <= fcHigh ? 'text-amber-600' : r.fcPct > 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                        {r.fcPct > 0 ? `${r.fcPct.toFixed(1)}%` : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 text-center font-mono text-purple-600">{r.laborPct > 0 ? `${r.laborPct.toFixed(1)}%` : '—'}</td>
+                      <td className="px-4 py-2.5 text-center font-mono text-amber-600">{r.overheadPct > 0 ? `${r.overheadPct.toFixed(1)}%` : '—'}</td>
+                      <td className={`px-4 py-2.5 text-center font-mono font-semibold ${r.netMargin >= 20 ? 'text-green-600' : r.netMargin >= 10 ? 'text-amber-600' : r.netMargin > 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                        {r.rev > 0 ? `${r.netMargin.toFixed(1)}%` : '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── 11. Branches Comparison Report ────────────────────────────────
+
+function BranchesReport({ month, fcLow = 35, fcHigh = 45 }: { month: string; fcLow?: number; fcHigh?: number }) {
+  const { profile } = useUserStore()
+  const [brandList, setBrandList] = useState<{ id: string; name_ar: string; primary_color?: string }[]>([])
+  const [brandData, setBrandData] = useState<Record<string, any>>({})
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // guard: بعد التحقق من الصلاحية داخل الـ effect لا قبله
+    if (profile?.brand_access !== 'all') return
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+
+      const { data: brands } = await (supabase.from('brands') as any)
+        .select('id, name_ar, primary_color').order('id')
+
+      const allBrands = (brands || []) as { id: string; name_ar: string; primary_color?: string }[]
+      setBrandList(allBrands)
+
+      const results = await Promise.all(allBrands.map(async (b) => {
+        const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+          (supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', b.id).gte('sale_date', start).lte('sale_date', end),
+          (supabase.from('labor_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
+          (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', b.id).eq('month', month),
+        ])
+        const rev = (sales || []).reduce((s: number, r: any) => s + (r.revenue ?? 0), 0) / VAT_RATE
+        const mat = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
+        const lab = (labor     || []).reduce((s: number, r: any) => s + r.amount, 0)
+        const ovh = (overhead  || []).reduce((s: number, r: any) => s + r.amount, 0)
+        return [b.id, {
+          rev, mat, lab, ovh,
+          fcPct:     rev > 0 ? (mat / rev) * 100 : 0,
+          laborPct:  rev > 0 ? (lab / rev) * 100 : 0,
+          ovhPct:    rev > 0 ? (ovh / rev) * 100 : 0,
+          netMargin: rev > 0 ? ((rev - mat - lab - ovh) / rev) * 100 : 0,
+          netProfit: rev - mat - lab - ovh,
+        }] as [string, any]
+      }))
+
+      const map = Object.fromEntries(results)
+      const combined = allBrands.reduce((acc, b) => {
+        const d = map[b.id]
+        return { rev: acc.rev + d.rev, mat: acc.mat + d.mat, lab: acc.lab + d.lab, ovh: acc.ovh + d.ovh, netProfit: acc.netProfit + d.netProfit }
+      }, { rev: 0, mat: 0, lab: 0, ovh: 0, netProfit: 0 })
+      const cRev = combined.rev
+      map['__combined'] = {
+        ...combined,
+        fcPct:     cRev > 0 ? (combined.mat / cRev) * 100 : 0,
+        laborPct:  cRev > 0 ? (combined.lab / cRev) * 100 : 0,
+        ovhPct:    cRev > 0 ? (combined.ovh / cRev) * 100 : 0,
+        netMargin: cRev > 0 ? (combined.netProfit / cRev) * 100 : 0,
+      }
+
+      setBrandData(map)
+      setLoading(false)
+    }
+    load()
+  }, [month, profile?.brand_access])
+
+  if (profile?.brand_access !== 'all') {
+    return (
+      <div className="bg-amber-50 border border-amber-200 rounded-xl p-8 text-center">
+        <p className="text-amber-800 font-semibold text-sm">هذه الميزة تتطلب صلاحية الوصول لجميع البراندات</p>
+        <p className="text-amber-600 text-xs mt-1">تواصل مع مدير النظام للحصول على صلاحية &quot;الكل&quot;</p>
+      </div>
+    )
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!Object.keys(brandData).length) return null
+
+  const fmt = (v: number) => v.toLocaleString('en-US', { maximumFractionDigits: 0 }) + ' ر.س'
+  const fmtPct = (v: number) => v > 0 ? `${v.toFixed(1)}%` : '—'
+  const fcColor = (v: number) => v <= fcLow ? 'text-green-600' : v <= fcHigh ? 'text-amber-600' : v > 0 ? 'text-red-600' : 'text-gray-300'
+  const marginColor = (v: number) => v >= 20 ? 'text-green-600' : v >= 10 ? 'text-amber-600' : v > 0 ? 'text-red-600' : 'text-gray-300'
+
+  const BRAND_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6']
+
+  const displayCols = [
+    ...brandList.map((b, i) => ({ key: b.id, label: b.name_ar, color: b.primary_color ?? BRAND_COLORS[i % BRAND_COLORS.length] })),
+    { key: '__combined', label: 'الإجمالي', color: '#8b5cf6' },
+  ]
+
+  const chartCategories = ['الإيراد', 'المشتريات', 'العمالة', 'التشغيل', 'صافي الربح']
+  const chartData = chartCategories.map(name => {
+    const row: any = { name }
+    brandList.forEach(b => {
+      const d = brandData[b.id]
+      if (!d) return
+      row[b.id] = name === 'الإيراد' ? d.rev : name === 'المشتريات' ? d.mat : name === 'العمالة' ? d.lab : name === 'التشغيل' ? d.ovh : Math.max(0, d.netProfit)
+    })
+    return row
+  })
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">مقارنة البراندات — {formatYearMonth(month)}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">أداء جميع البراندات جنباً إلى جنب</p>
+      </div>
+
+      <div className={`grid gap-4 grid-cols-1 ${displayCols.length <= 3 ? 'md:grid-cols-3' : displayCols.length <= 4 ? 'md:grid-cols-4' : 'md:grid-cols-3 lg:grid-cols-' + Math.min(displayCols.length, 5)}`}>
+        {displayCols.map(({ key, label, color }) => {
+          const d = brandData[key]
+          if (!d) return null
+          return (
+            <div key={key} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100" style={{ borderLeftColor: color, borderLeftWidth: 3 }}>
+                <span className="font-semibold text-gray-900 text-sm">{label}</span>
+              </div>
+              <div className="p-4 space-y-2.5 text-sm">
+                {[
+                  { label: 'الإيراد',     value: fmt(d.rev),          cls: 'text-blue-700 font-bold' },
+                  { label: 'المشتريات',   value: fmt(d.mat),          cls: 'text-red-600' },
+                  { label: 'FC%',         value: fmtPct(d.fcPct),     cls: fcColor(d.fcPct) + ' font-semibold' },
+                  { label: 'عمالة%',      value: fmtPct(d.laborPct),  cls: 'text-purple-600' },
+                  { label: 'تشغيل%',     value: fmtPct(d.ovhPct),    cls: 'text-amber-600' },
+                  { label: 'هامش صافي%', value: fmtPct(d.netMargin), cls: marginColor(d.netMargin) + ' font-bold' },
+                  { label: 'صافي الربح', value: fmt(d.netProfit),    cls: d.netProfit >= 0 ? 'text-emerald-700 font-bold' : 'text-red-700 font-bold' },
+                ].map(row => (
+                  <div key={row.label} className="flex justify-between items-center">
+                    <span className="text-gray-500">{row.label}</span>
+                    <span className={`font-mono ${row.cls}`}>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-xl p-4">
+        <p className="text-xs font-medium text-gray-500 mb-3">مقارنة التكاليف والإيراد بين البراندات</p>
+        <ResponsiveContainer width="100%" height={260}>
+          <BarChart data={chartData} margin={{ top: 0, right: 10, left: 10, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+            <XAxis dataKey="name" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip formatter={(v) => [`${Number(v).toFixed(0)} ر.س`]} />
+            <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ fontSize: 11 }}>{brandList.find(b => b.id === v)?.name_ar ?? v}</span>} />
+            {brandList.map((b, i) => (
+              <Bar key={b.id} dataKey={b.id} name={b.id} fill={b.primary_color ?? BRAND_COLORS[i % BRAND_COLORS.length]} radius={[3, 3, 0, 0]} />
+            ))}
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
+// ── 12. Price History Report ──────────────────────────────────────
+
+function PriceHistoryReport({ brand }: { brand: string }) {
+  const [rows, setRows]           = useState<any[]>([])
+  const [loading, setLoading]     = useState(true)
+  const [days, setDays]           = useState(90)
+  const [selectedSku, setSelectedSku] = useState<string | null>(null)
+  const [search, setSearch]       = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const since = new Date(Date.now() - days * 86400000).toISOString()
+      const { data } = await (supabase.from('price_history') as any)
+        .select('id, sku, item_name, item_type, old_price, new_price, changed_at')
+        .eq('brand_id', brand)
+        .gte('changed_at', since)
+        .order('changed_at', { ascending: false })
+        .limit(2000)
+      setRows((data || []) as any[])
+      setLoading(false)
+    }
+    load()
+  }, [brand, days])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length) return (
+    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+      لا توجد تغييرات أسعار في آخر {days} يوم
+    </div>
+  )
+
+  // تجميع حسب SKU
+  const itemMap = new Map<string, { name: string; type: string; changes: { date: string; old: number; new: number; pct: number }[] }>()
+  for (const r of rows as any[]) {
+    if (!itemMap.has(r.sku)) itemMap.set(r.sku, { name: r.item_name, type: r.item_type, changes: [] })
+    const pct = r.old_price > 0 ? ((r.new_price - r.old_price) / r.old_price) * 100 : 0
+    itemMap.get(r.sku)!.changes.push({ date: r.changed_at.slice(0, 10), old: r.old_price, new: r.new_price, pct })
+  }
+
+  // أكثر 10 مواد تقلباً (أعلى فارق % إجمالي)
+  const volatile = [...itemMap.entries()]
+    .map(([sku, info]) => {
+      const totalPct = info.changes.reduce((s, c) => s + Math.abs(c.pct), 0)
+      const latest = info.changes[0]
+      const oldest = info.changes[info.changes.length - 1]
+      const netPct = oldest.old > 0 ? ((latest.new - oldest.old) / oldest.old) * 100 : 0
+      return { sku, name: info.name, type: info.type, changes: info.changes.length, totalPct, netPct, latest }
+    })
+    .sort((a, b) => b.totalPct - a.totalPct)
+    .slice(0, 10)
+
+  // بيانات الخط للصنف المختار
+  const selItem = selectedSku ? itemMap.get(selectedSku) : null
+  const chartData = selItem
+    ? [...selItem.changes].reverse().map(c => ({ date: c.date, price: c.new }))
+    : []
+
+  const filteredRows = (search
+    ? rows.filter((r: any) => r.item_name.toLowerCase().includes(search.toLowerCase()))
+    : rows) as any[]
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تاريخ تغيّرات الأسعار</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{rows.length} تغيير · {itemMap.size} مادة متأثرة</p>
+        </div>
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[30, 90, 180].map(d => (
+            <button key={d} onClick={() => setDays(d)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${days === d ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              آخر {d} يوم
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* أكثر 10 مواد تقلباً */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+          <span className="font-semibold text-sm text-gray-900">أكثر 10 مواد تقلباً في السعر</span>
+        </div>
+        <table suppressHydrationWarning className="w-full text-sm">
+          <thead>
+            <tr className="text-xs text-gray-500 bg-gray-50/50 border-b border-gray-100">
+              <th className="text-right px-4 py-2.5 font-medium">المادة</th>
+              <th className="text-center px-4 py-2.5 font-medium">عدد التغييرات</th>
+              <th className="text-center px-4 py-2.5 font-medium">السعر الحالي</th>
+              <th className="text-center px-4 py-2.5 font-medium">التغيّر الإجمالي</th>
+              <th className="text-center px-4 py-2.5 font-medium">مخطط</th>
+            </tr>
+          </thead>
+          <tbody>
+            {volatile.map((v, i) => (
+              <tr key={v.sku} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'} hover:bg-blue-50/30 cursor-pointer`}
+                onClick={() => setSelectedSku(prev => prev === v.sku ? null : v.sku)}>
+                <td className="px-4 py-2.5">
+                  <div className="font-medium text-gray-900 text-sm">{v.name}</div>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <span className="text-[10px] font-mono text-gray-400">{v.sku}</span>
+                    <span className={`text-[10px] px-1 rounded ${v.type === 'ingredient' ? 'bg-green-100 text-green-700' : 'bg-purple-100 text-purple-700'}`}>
+                      {v.type === 'ingredient' ? 'خام' : 'باتش'}
+                    </span>
+                  </div>
+                </td>
+                <td className="px-4 py-2.5 text-center font-mono text-gray-600">{v.changes}</td>
+                <td className="px-4 py-2.5 text-center font-mono font-semibold text-gray-900">
+                  {v.latest.new.toFixed(3)} ر.س
+                </td>
+                <td className={`px-4 py-2.5 text-center font-mono font-semibold ${v.netPct > 0 ? 'text-red-600' : v.netPct < 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                  {v.netPct !== 0 ? `${v.netPct >= 0 ? '+' : ''}${v.netPct.toFixed(1)}%` : '—'}
+                </td>
+                <td className="px-4 py-2.5 text-center">
+                  <span className="text-xs text-blue-500">{selectedSku === v.sku ? '▲ مخفي' : '▼ عرض'}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* خط الأسعار للصنف المختار */}
+      {selItem && chartData.length > 1 && (
+        <div className="bg-white border border-blue-200 rounded-xl p-4">
+          <p className="text-xs font-medium text-gray-600 mb-3">
+            تاريخ أسعار: <span className="text-blue-700 font-semibold">{selItem.name}</span>
+          </p>
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={chartData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => [`${Number(v).toFixed(3)} ر.س`, 'السعر']} />
+              <Line type="stepAfter" dataKey="price" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} name="السعر" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* سجل التغييرات */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-100 bg-gray-50 flex items-center justify-between gap-3">
+          <span className="font-semibold text-sm text-gray-900">سجل كل التغييرات</span>
+          <input type="text" placeholder="بحث بالمادة..." value={search}
+            onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1 text-xs focus:outline-none focus:border-blue-500 bg-white w-40" />
+        </div>
+        <div className="overflow-x-auto max-h-80 overflow-y-auto">
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead className="sticky top-0">
+              <tr className="text-xs text-gray-500 bg-gray-50 border-b border-gray-200">
+                <th className="text-right px-4 py-2.5 font-medium">المادة</th>
+                <th className="text-center px-4 py-2.5 font-medium">السعر القديم</th>
+                <th className="text-center px-4 py-2.5 font-medium">السعر الجديد</th>
+                <th className="text-center px-4 py-2.5 font-medium">التغيّر</th>
+                <th className="text-right px-4 py-2.5 font-medium">التاريخ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredRows.slice(0, 100).map((r: any, i: number) => {
+                const pct = r.old_price > 0 ? ((r.new_price - r.old_price) / r.old_price) * 100 : 0
+                return (
+                  <tr key={r.id} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2">
+                      <div className="font-medium text-gray-800 text-xs">{r.item_name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.sku}</div>
+                    </td>
+                    <td className="px-4 py-2 text-center font-mono text-gray-500 text-xs">{r.old_price.toFixed(3)}</td>
+                    <td className="px-4 py-2 text-center font-mono font-semibold text-gray-900 text-xs">{r.new_price.toFixed(3)}</td>
+                    <td className={`px-4 py-2 text-center font-mono text-xs font-semibold ${pct > 5 ? 'text-red-600' : pct < -5 ? 'text-green-600' : 'text-gray-500'}`}>
+                      {pct !== 0 ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-2 text-xs text-gray-400 font-mono">{r.changed_at.slice(0, 10)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {filteredRows.length > 100 && (
+          <div className="px-4 py-2 border-t border-gray-100 text-xs text-gray-400 text-center">
+            يعرض أول 100 من {filteredRows.length} سجل
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── 13. Actual FC vs Theoretical ─────────────────────────────────
+
+interface FCMonthRow {
+  month: string
+  rev: number
+  fcTheoretical: number   // % من الوصفات
+  fcPurchases: number     // % من المشتريات
+  fcWaste: number         // % من الهدر
+  gap: number             // فجوة غير مفسّرة = fcPurchases - fcTheoretical - fcWaste
+  purchasesAmt: number
+  theoreticalAmt: number
+  wasteAmt: number
+}
+
+function ActualFCReport({ brand, month, branch = '', fcLow = 35, fcHigh = 45 }: { brand: string; month: string; branch?: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows]   = useState<FCMonthRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [nMonths, setNMonths] = useState(6)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const months = lastNMonths(nMonths)
+
+      // 4 queries موحّدة بدل nMonths × 4
+      const rangeStart = monthRange(months[months.length - 1]).start
+      const rangeEnd   = monthRange(months[0]).end
+
+      const [{ data: sales }, { data: purchases }, { data: wasteLogs }, { data: recipes }] = await Promise.all([
+        wb((supabase.from('daily_sales') as any)
+          .select('sale_date, product_sku, qty_sold, revenue')
+          .eq('brand_id', brand).gte('sale_date', rangeStart).lte('sale_date', rangeEnd).limit(20000), branch),
+        (supabase.from('purchases') as any)
+          .select('purchase_date, total_price')
+          .eq('brand_id', brand).gte('purchase_date', rangeStart).lte('purchase_date', rangeEnd).limit(10000),
+        (supabase.from('waste_log') as any)
+          .select('log_date, value')
+          .eq('brand_id', brand).gte('log_date', rangeStart).lte('log_date', rangeEnd).limit(5000),
+        (supabase.from('recipes') as any)
+          .select('sku, food_cost_pct')
+          .eq('brand_id', brand).eq('is_active', true),
+      ])
+
+      const recipeMap = new Map<string, number>()
+      for (const r of (recipes || []) as any[]) recipeMap.set(r.sku, r.food_cost_pct)
+
+      // Group by month
+      const revMap  = new Map<string, number>()
+      const costMap = new Map<string, number>()  // theoretical
+      const purMap  = new Map<string, number>()
+      const wstMap  = new Map<string, number>()
+
+      for (const s of (sales || []) as any[]) {
+        const m = (s.sale_date as string).slice(0, 7)
+        const rev = s.revenue / VAT_RATE
+        revMap.set(m, (revMap.get(m) ?? 0) + rev)
+        const fc = recipeMap.get(s.product_sku)
+        if (fc) costMap.set(m, (costMap.get(m) ?? 0) + rev * (fc / 100))
+      }
+      for (const p of (purchases || []) as any[]) {
+        const m = (p.purchase_date as string).slice(0, 7)
+        purMap.set(m, (purMap.get(m) ?? 0) + p.total_price)
+      }
+      for (const w of (wasteLogs || []) as any[]) {
+        const m = (w.log_date as string).slice(0, 7)
+        wstMap.set(m, (wstMap.get(m) ?? 0) + (w.value ?? 0))
+      }
+
+      const result: FCMonthRow[] = months.map(m => {
+        const rev  = revMap.get(m) ?? 0
+        const pur  = purMap.get(m) ?? 0
+        const th   = costMap.get(m) ?? 0
+        const wst  = wstMap.get(m) ?? 0
+        const fcTh  = rev > 0 ? (th  / rev) * 100 : 0
+        const fcPur = rev > 0 ? (pur / rev) * 100 : 0
+        const fcWst = rev > 0 ? (wst / rev) * 100 : 0
+        const gap   = fcPur - fcTh - fcWst
+        return { month: formatYearMonth(m), rev, fcTheoretical: fcTh, fcPurchases: fcPur, fcWaste: fcWst, gap, purchasesAmt: pur, theoreticalAmt: th, wasteAmt: wst }
+      }).reverse()
+
+      setRows(result)
+      setLoading(false)
+    }
+    load()
+  }, [brand, nMonths])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  const current = rows.find(r => r.month === formatYearMonth(month)) ?? rows[rows.length - 1]
+  const hasData  = rows.some(r => r.rev > 0)
+
+  const fc  = (v: number) => v <= fcLow ? 'text-green-600' : v <= fcHigh ? 'text-amber-600' : v > 0 ? 'text-red-600' : 'text-gray-300'
+  const gap = (v: number) => Math.abs(v) < 2 ? 'text-green-600' : Math.abs(v) < 5 ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">FC% فعلي vs نظري</h2>
+          <p className="text-xs text-gray-500 mt-0.5">الفجوة = مشتريات − نظري − هدر مسجّل → تسريب خفي</p>
+        </div>
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[3, 6, 12].map(n => (
+            <button key={n} onClick={() => setNMonths(n)}
+              className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${nMonths === n ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {n} أشهر
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI الشهر الحالي */}
+      {current && current.rev > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="text-xs text-gray-500 mb-1">الإيراد ({current.month})</div>
+            <div className="text-xl font-bold font-mono text-blue-700">{current.rev.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="text-xs text-gray-500 mb-1">FC% نظري (وصفات)</div>
+            <div className={`text-xl font-bold font-mono ${fc(current.fcTheoretical)}`}>{current.fcTheoretical.toFixed(1)}%</div>
+            <div className="text-xs text-gray-400 mt-0.5">{current.theoreticalAmt.toFixed(0)} ر.س</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="text-xs text-gray-500 mb-1">FC% مشتريات (فعلي)</div>
+            <div className={`text-xl font-bold font-mono ${fc(current.fcPurchases)}`}>{current.fcPurchases.toFixed(1)}%</div>
+            <div className="text-xs text-gray-400 mt-0.5">{current.purchasesAmt.toFixed(0)} ر.س</div>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <div className="text-xs text-gray-500 mb-1">FC% هدر مسجّل</div>
+            <div className={`text-xl font-bold font-mono ${current.fcWaste > 3 ? 'text-amber-600' : 'text-gray-600'}`}>{current.fcWaste.toFixed(1)}%</div>
+            <div className="text-xs text-gray-400 mt-0.5">{current.wasteAmt.toFixed(0)} ر.س</div>
+          </div>
+          <div className={`border rounded-xl p-4 ${Math.abs(current.gap) >= 5 ? 'bg-red-50 border-red-200' : Math.abs(current.gap) >= 2 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+            <div className="text-xs text-gray-500 mb-1">الفجوة غير المفسّرة</div>
+            <div className={`text-xl font-bold font-mono ${gap(current.gap)}`}>{current.gap >= 0 ? '+' : ''}{current.gap.toFixed(1)}%</div>
+            <div className="text-xs mt-0.5 text-gray-500">
+              {Math.abs(current.gap) < 2 ? 'ضمن الطبيعي ✓' : Math.abs(current.gap) < 5 ? 'تحذير — راجع الهدر' : 'تسريب مرتفع — تحقيق مطلوب'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* تفسير المعادلة */}
+      <div className="bg-blue-50 border border-blue-100 rounded-xl px-4 py-3 text-xs text-blue-800 space-y-1">
+        <div className="font-semibold">كيف تُفسَّر الأرقام:</div>
+        <div>• <span className="font-semibold">FC نظري</span>: ما كان يجب أن يُصرف من مواد بناءً على الوصفات × المبيعات</div>
+        <div>• <span className="font-semibold">FC مشتريات</span>: ما اشتريته فعلياً خلال الفترة ÷ الإيراد (يعكس الإنفاق الحقيقي)</div>
+        <div>• <span className="font-semibold">الفجوة</span> = مشتريات − نظري − هدر = هدر غير مسجّل / سرقة / فروق جرد</div>
+      </div>
+
+      {/* مخطط الاتجاه */}
+      {hasData && (
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <p className="text-xs font-medium text-gray-500 mb-3">مقارنة FC% عبر الزمن</p>
+          <ResponsiveContainer width="100%" height={260}>
+            <LineChart data={rows} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="month" tick={{ fontSize: 10 }} />
+              <YAxis tick={{ fontSize: 11 }} unit="%" domain={['auto', 'auto']} />
+              <Tooltip formatter={(v: any) => [`${Number(v).toFixed(1)}%`]} />
+              <Legend iconType="circle" iconSize={8} formatter={(v) => <span style={{ fontSize: 11 }}>{v}</span>} />
+              <Line type="monotone" dataKey="fcTheoretical" name="FC% نظري"    stroke="#3b82f6" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="fcPurchases"  name="FC% مشتريات"  stroke="#ef4444" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="fcWaste"      name="FC% هدر"       stroke="#f59e0b" strokeWidth={1.5} dot={{ r: 2 }} strokeDasharray="4 4" />
+              <Line type="monotone" dataKey="gap"          name="الفجوة"        stroke="#8b5cf6" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="6 3" />
+              <ReferenceLine y={0} stroke="#d1d5db" strokeDasharray="2 2" />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* جدول تفصيلي */}
+      {hasData && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+            <span className="font-semibold text-sm text-gray-900">جدول تفصيلي شهري</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="text-xs text-gray-500 bg-gray-50/50 border-b border-gray-100">
+                  <th className="text-right px-4 py-2.5 font-medium">الشهر</th>
+                  <th className="text-left px-4 py-2.5 font-medium">الإيراد</th>
+                  <th className="text-center px-4 py-2.5 font-medium bg-blue-50 text-blue-700">FC% نظري</th>
+                  <th className="text-center px-4 py-2.5 font-medium bg-red-50 text-red-700">FC% مشتريات</th>
+                  <th className="text-center px-4 py-2.5 font-medium bg-amber-50 text-amber-700">FC% هدر</th>
+                  <th className="text-center px-4 py-2.5 font-medium bg-purple-50 text-purple-700">الفجوة</th>
+                  <th className="text-right px-4 py-2.5 font-medium">التقييم</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={i} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5 font-medium text-gray-900">{r.month}</td>
+                    <td className="px-4 py-2.5 font-mono text-blue-700 text-xs">{r.rev > 0 ? `${r.rev.toLocaleString('en-US', { maximumFractionDigits: 0 })} ر.س` : '—'}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcTheoretical)}`}>{r.rev > 0 ? `${r.fcTheoretical.toFixed(1)}%` : '—'}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-semibold ${fc(r.fcPurchases)}`}>{r.purchasesAmt > 0 ? `${r.fcPurchases.toFixed(1)}%` : '—'}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono ${r.fcWaste > 0 ? 'text-amber-600' : 'text-gray-300'}`}>{r.fcWaste > 0 ? `${r.fcWaste.toFixed(1)}%` : '—'}</td>
+                    <td className={`px-4 py-2.5 text-center font-mono font-bold ${gap(r.gap)}`}>
+                      {r.rev > 0 && r.purchasesAmt > 0 ? `${r.gap >= 0 ? '+' : ''}${r.gap.toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {r.rev > 0 && r.purchasesAmt > 0 && (
+                        <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${Math.abs(r.gap) < 2 ? 'bg-green-50 text-green-700' : Math.abs(r.gap) < 5 ? 'bg-amber-50 text-amber-700' : 'bg-red-50 text-red-700'}`}>
+                          {Math.abs(r.gap) < 2 ? 'طبيعي' : Math.abs(r.gap) < 5 ? 'تحذير' : 'تحقيق مطلوب'}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+            <p className="text-xs text-gray-400">ملاحظة: FC مشتريات قد يختلف عن FC نظري بسبب تغيّر المخزون (شراء للمخزون لا للبيع المباشر). الفجوة ≥ 5% تستحق مراجعة.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 14. Dine-in vs Dine-out Report ───────────────────────────────
+
+function DineReport({ brand, fcLow = 35, fcHigh = 45 }: { brand: string; fcLow?: number; fcHigh?: number }) {
+  const [rows, setRows]     = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+  const [sortBy, setSortBy]   = useState<'name' | 'diff'>('diff')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { data } = await (supabase.from('recipes') as any)
+        .select('sku, product_name, sell_price, app_price, food_cost_pct, dine_out_food_cost_pct, total_cost, dine_out_total_cost, margin, dine_out_margin, yield_portions')
+        .eq('brand_id', brand).eq('is_active', true).eq('is_semi', false)
+        .not('app_price', 'is', null)
+        .order('product_name')
+      setRows((data || []) as any[])
+      setLoading(false)
+    }
+    load()
+  }, [brand])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!rows.length) return (
+    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+      لا توجد وصفات نشطة لديها سعر تطبيق (app_price) محدد
+    </div>
+  )
+
+  const processed = rows.map((r: any) => {
+    const diPrice = r.sell_price / VAT_RATE
+    const doPrice = r.app_price / VAT_RATE
+    const diFc    = r.food_cost_pct ?? 0
+    const doFc    = r.dine_out_food_cost_pct ?? (doPrice > 0 ? (r.dine_out_total_cost ?? r.total_cost) / doPrice * 100 : 0)
+    const diMargin = r.margin ?? (diPrice - r.total_cost)
+    const doMargin = r.dine_out_margin ?? (doPrice - (r.dine_out_total_cost ?? r.total_cost))
+    const fcDiff   = doFc - diFc
+    return { ...r, diPrice, doPrice, diFc, doFc, diMargin, doMargin, fcDiff, doHasData: !!r.app_price }
+  })
+
+  const filtered = (search ? processed.filter((r: any) => r.product_name.toLowerCase().includes(search.toLowerCase())) : processed)
+    .sort((a: any, b: any) => sortBy === 'diff' ? Math.abs(b.fcDiff) - Math.abs(a.fcDiff) : a.product_name.localeCompare(b.product_name, 'ar'))
+
+  const avgDiFc = processed.reduce((s: number, r: any) => s + r.diFc, 0) / processed.length
+  const avgDoFc = processed.reduce((s: number, r: any) => s + r.doFc, 0) / processed.length
+  const worse   = processed.filter((r: any) => r.fcDiff > 5).length
+  const avgDiMargin = processed.reduce((s: number, r: any) => s + r.diMargin, 0) / processed.length
+  const avgDoMargin = processed.reduce((s: number, r: any) => s + r.doMargin, 0) / processed.length
+
+  const fc = (v: number) => v <= fcLow ? 'text-green-600' : v <= fcHigh ? 'text-amber-600' : 'text-red-600'
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقرير الداخل vs التوصيل (Dine-in vs Dine-out)</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{processed.length} منتج لديه سعر تطبيق</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <input type="text" placeholder="بحث..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-36 focus:outline-none focus:border-blue-500 bg-white" />
+          <select value={sortBy} onChange={e => setSortBy(e.target.value as any)}
+            className="border border-gray-300 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 bg-white">
+            <option value="diff">ترتيب بالفرق</option>
+            <option value="name">ترتيب أبجدي</option>
+          </select>
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-400 mb-1">متوسط FC% — داخل</div>
+          <div className={`text-xl font-bold font-mono ${fc(avgDiFc)}`}>{avgDiFc.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-0.5">هامش: {avgDiMargin.toFixed(2)} ر.س</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-400 mb-1">متوسط FC% — توصيل</div>
+          <div className={`text-xl font-bold font-mono ${fc(avgDoFc)}`}>{avgDoFc.toFixed(1)}%</div>
+          <div className="text-xs text-gray-400 mt-0.5">هامش: {avgDoMargin.toFixed(2)} ر.س</div>
+        </div>
+        <div className={`rounded-xl border p-4 ${avgDoFc > avgDiFc ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+          <div className="text-xs text-gray-400 mb-1">فرق FC% (توصيل − داخل)</div>
+          <div className={`text-xl font-bold font-mono ${avgDoFc > avgDiFc ? 'text-amber-700' : 'text-green-700'}`}>
+            {avgDoFc >= avgDiFc ? '+' : ''}{(avgDoFc - avgDiFc).toFixed(1)}%
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            {avgDoFc > avgDiFc ? 'التوصيل أغلى تكلفةً' : 'التوصيل أقل تكلفةً'}
+          </div>
+        </div>
+        <div className={`rounded-xl border p-4 ${worse > 0 ? 'bg-red-50 border-red-200' : 'bg-green-50 border-green-200'}`}>
+          <div className="text-xs text-gray-400 mb-1">منتجات فرق FC% أكثر من 5%</div>
+          <div className={`text-xl font-bold font-mono ${worse > 0 ? 'text-red-600' : 'text-green-600'}`}>{worse}</div>
+          <div className="text-xs text-gray-400 mt-0.5">تستحق مراجعة التسعير</div>
+        </div>
+      </div>
+
+      {/* جدول المقارنة */}
+      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+        <div className="overflow-x-auto">
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                <th className="text-right px-4 py-3 font-medium">المنتج</th>
+                <th className="text-center px-3 py-3 font-medium bg-blue-50 text-blue-700" colSpan={3}>داخل المطعم</th>
+                <th className="text-center px-3 py-3 font-medium bg-green-50 text-green-700" colSpan={3}>توصيل (تطبيق)</th>
+                <th className="text-center px-3 py-3 font-medium">فرق FC%</th>
+              </tr>
+              <tr className="bg-gray-50 border-b border-gray-100 text-[10px] text-gray-400">
+                <th className="px-4 py-1.5" />
+                <th className="text-center px-3 py-1.5">السعر (قبل VAT)</th>
+                <th className="text-center px-3 py-1.5">FC%</th>
+                <th className="text-center px-3 py-1.5">هامش</th>
+                <th className="text-center px-3 py-1.5">السعر (قبل VAT)</th>
+                <th className="text-center px-3 py-1.5">FC%</th>
+                <th className="text-center px-3 py-1.5">هامش</th>
+                <th className="text-center px-3 py-1.5" />
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r: any, i: number) => (
+                <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                  <td className="px-4 py-2.5">
+                    <div className="font-medium text-gray-900 text-xs">{r.product_name}</div>
+                    <div className="text-[10px] text-gray-400 font-mono">{r.sku}</div>
+                  </td>
+                  {/* DI */}
+                  <td className="px-3 py-2.5 text-center font-mono text-xs text-gray-700">{r.diPrice.toFixed(2)}</td>
+                  <td className={`px-3 py-2.5 text-center font-mono font-semibold text-xs ${fc(r.diFc)}`}>{r.diFc.toFixed(1)}%</td>
+                  <td className={`px-3 py-2.5 text-center font-mono text-xs ${r.diMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>{r.diMargin.toFixed(2)}</td>
+                  {/* DO */}
+                  <td className="px-3 py-2.5 text-center font-mono text-xs text-gray-700">{r.doPrice.toFixed(2)}</td>
+                  <td className={`px-3 py-2.5 text-center font-mono font-semibold text-xs ${fc(r.doFc)}`}>{r.doFc.toFixed(1)}%</td>
+                  <td className={`px-3 py-2.5 text-center font-mono text-xs ${r.doMargin >= 0 ? 'text-green-600' : 'text-red-600'}`}>{r.doMargin.toFixed(2)}</td>
+                  {/* Diff */}
+                  <td className="px-3 py-2.5 text-center">
+                    <span className={`text-xs font-mono font-bold ${Math.abs(r.fcDiff) < 2 ? 'text-gray-400' : r.fcDiff > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {r.fcDiff >= 0 ? '+' : ''}{r.fcDiff.toFixed(1)}%
+                    </span>
+                    {Math.abs(r.fcDiff) > 5 && <div className="text-[9px] text-red-500 mt-0.5">راجع التسعير</div>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+          <p className="text-xs text-gray-400">السعر قبل VAT · الهامش = سعر البيع − تكلفة الوصفة · فرق FC% إيجابي يعني التوصيل أغلى نسبياً</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── 15. Discounts & Returns Report ───────────────────────────────
+
+function DiscountsReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+      const { data: sales } = await wb(
+        (supabase.from('daily_sales') as any)
+          .select('product_sku, product_name, qty_sold, revenue, discount_amount, return_amount, cancel_amount, return_qty, cancel_qty, branch_name')
+          .eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end), branch)
+      if (!sales?.length) { setData(null); setLoading(false); return }
+
+      const rows = sales as any[]
+      const totalRev    = rows.reduce((s: number, r: any) => s + r.revenue, 0) / VAT_RATE
+      const totalDisc   = rows.reduce((s: number, r: any) => s + (r.discount_amount ?? 0), 0) / VAT_RATE
+      const totalReturn = rows.reduce((s: number, r: any) => s + (r.return_amount ?? 0), 0) / VAT_RATE
+      const totalCancel = rows.reduce((s: number, r: any) => s + (r.cancel_amount ?? 0), 0) / VAT_RATE
+      const totalImpact = totalDisc + totalReturn + totalCancel
+
+      // FC% الصافي بعد خصم الخصومات
+      const netRev = Math.max(0, totalRev - totalDisc - totalReturn - totalCancel)
+      const discImpactOnFc = totalRev > 0 && netRev > 0
+        ? 0  // placeholder — would need theoretical cost
+        : 0
+
+      // حسب المنتج
+      const byProduct = new Map<string, any>()
+      for (const r of rows) {
+        const key = r.product_sku || r.product_name
+        const ex = byProduct.get(key)
+        if (ex) {
+          ex.revenue += r.revenue / VAT_RATE
+          ex.discount += (r.discount_amount ?? 0) / VAT_RATE
+          ex.returnAmt += (r.return_amount ?? 0) / VAT_RATE
+          ex.cancelAmt += (r.cancel_amount ?? 0) / VAT_RATE
+          ex.returnQty += r.return_qty ?? 0
+          ex.cancelQty += r.cancel_qty ?? 0
+          ex.qty += r.qty_sold
+        } else {
+          byProduct.set(key, {
+            name: r.product_name, sku: r.product_sku,
+            revenue: r.revenue / VAT_RATE,
+            discount: (r.discount_amount ?? 0) / VAT_RATE,
+            returnAmt: (r.return_amount ?? 0) / VAT_RATE,
+            cancelAmt: (r.cancel_amount ?? 0) / VAT_RATE,
+            returnQty: r.return_qty ?? 0,
+            cancelQty: r.cancel_qty ?? 0,
+            qty: r.qty_sold,
+          })
+        }
+      }
+
+      // حسب الفرع
+      const byBranch = new Map<string, any>()
+      for (const r of rows) {
+        const b = r.branch_name || 'غير محدد'
+        const ex = byBranch.get(b)
+        if (ex) {
+          ex.revenue += r.revenue / VAT_RATE
+          ex.discount += (r.discount_amount ?? 0) / VAT_RATE
+          ex.returnAmt += (r.return_amount ?? 0) / VAT_RATE
+        } else {
+          byBranch.set(b, { revenue: r.revenue / VAT_RATE, discount: (r.discount_amount ?? 0) / VAT_RATE, returnAmt: (r.return_amount ?? 0) / VAT_RATE })
+        }
+      }
+
+      const topByDiscount = [...byProduct.values()]
+        .filter((p: any) => p.discount + p.returnAmt + p.cancelAmt > 0)
+        .sort((a: any, b: any) => (b.discount + b.returnAmt + b.cancelAmt) - (a.discount + a.returnAmt + a.cancelAmt))
+        .slice(0, 10)
+
+      const branchData = [...byBranch.entries()]
+        .map(([name, d]) => ({ name, ...d, discRate: d.revenue > 0 ? ((d.discount + d.returnAmt) / d.revenue) * 100 : 0 }))
+        .sort((a: any, b: any) => b.discRate - a.discRate)
+
+      setData({ totalRev, totalDisc, totalReturn, totalCancel, totalImpact, netRev, topByDiscount, branchData })
+      setLoading(false)
+    }
+    load()
+  }, [brand, month, branch])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+  if (!data) return <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات مبيعات لهذا الشهر</div>
+
+  const d = data
+  const pct = (v: number) => d.totalRev > 0 ? `${((v / d.totalRev) * 100).toFixed(1)}%` : '—'
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">تقرير الخصومات والمرتجعات — {formatYearMonth(month)}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">أثر الخصومات والإلغاءات على صافي الإيراد</p>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <KpiCard label="الإيراد الإجمالي" value={`${d.totalRev.toFixed(0)} ر.س`} color="text-blue-700" />
+        <KpiCard label="الخصومات" value={`${d.totalDisc.toFixed(0)} ر.س`} sub={pct(d.totalDisc)} color="text-amber-600" />
+        <KpiCard label="المرتجعات" value={`${d.totalReturn.toFixed(0)} ر.س`} sub={pct(d.totalReturn)} color="text-red-600" />
+        <KpiCard label="الإلغاءات" value={`${d.totalCancel.toFixed(0)} ر.س`} sub={pct(d.totalCancel)} color="text-orange-600" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className={`rounded-xl border p-4 ${d.totalImpact / d.totalRev > 0.05 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+          <div className="text-xs text-gray-500 mb-1">إجمالي التأثير على الإيراد</div>
+          <div className={`text-2xl font-bold font-mono ${d.totalImpact / d.totalRev > 0.05 ? 'text-red-700' : 'text-gray-700'}`}>
+            −{d.totalImpact.toFixed(0)} ر.س
+          </div>
+          <div className="text-xs text-gray-400 mt-1">{pct(d.totalImpact)} من الإيراد الإجمالي</div>
+        </div>
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">صافي الإيراد (بعد الخصومات)</div>
+          <div className="text-2xl font-bold font-mono text-green-700">{d.netRev.toFixed(0)} ر.س</div>
+          <div className="text-xs text-gray-400 mt-1">{((d.netRev / d.totalRev) * 100).toFixed(1)}% من الإجمالي</div>
+        </div>
+      </div>
+
+      {d.topByDiscount.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+            <span className="font-semibold text-sm text-gray-900">أكثر المنتجات خصوماً ومرتجعات</span>
+          </div>
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-500 bg-gray-50/50 border-b border-gray-100">
+                <th className="text-right px-4 py-2.5 font-medium">المنتج</th>
+                <th className="text-center px-3 py-2.5 font-medium">المبيعات</th>
+                <th className="text-center px-3 py-2.5 font-medium text-amber-600">خصم</th>
+                <th className="text-center px-3 py-2.5 font-medium text-red-600">مرتجع</th>
+                <th className="text-center px-3 py-2.5 font-medium text-orange-600">إلغاء</th>
+                <th className="text-center px-3 py-2.5 font-medium">نسبة التأثير</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.topByDiscount.map((p: any, i: number) => {
+                const impact = p.discount + p.returnAmt + p.cancelAmt
+                const rate = p.revenue > 0 ? (impact / p.revenue) * 100 : 0
+                return (
+                  <tr key={i} className={`border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{p.name}</div>
+                    </td>
+                    <td className="px-3 py-2.5 text-center font-mono text-gray-600 text-xs">{p.revenue.toFixed(0)}</td>
+                    <td className="px-3 py-2.5 text-center font-mono text-amber-600 text-xs font-semibold">{p.discount > 0 ? p.discount.toFixed(2) : '—'}</td>
+                    <td className="px-3 py-2.5 text-center font-mono text-red-600 text-xs font-semibold">{p.returnAmt > 0 ? p.returnAmt.toFixed(2) : '—'}</td>
+                    <td className="px-3 py-2.5 text-center font-mono text-orange-600 text-xs font-semibold">{p.cancelAmt > 0 ? p.cancelAmt.toFixed(2) : '—'}</td>
+                    <td className="px-3 py-2.5 text-center">
+                      <span className={`text-xs font-mono font-bold ${rate > 10 ? 'text-red-600' : rate > 5 ? 'text-amber-600' : 'text-gray-500'}`}>
+                        {rate.toFixed(1)}%
+                      </span>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {d.branchData.length > 1 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-5 py-3 border-b border-gray-100 bg-gray-50">
+            <span className="font-semibold text-sm text-gray-900">معدل الخصومات حسب الفرع</span>
+          </div>
+          <table suppressHydrationWarning className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-gray-500 bg-gray-50/50 border-b border-gray-100">
+                <th className="text-right px-4 py-2.5 font-medium">الفرع</th>
+                <th className="text-center px-4 py-2.5 font-medium">الإيراد</th>
+                <th className="text-center px-4 py-2.5 font-medium">الخصومات</th>
+                <th className="text-center px-4 py-2.5 font-medium">المرتجعات</th>
+                <th className="text-center px-4 py-2.5 font-medium">معدل الإجمالي</th>
+              </tr>
+            </thead>
+            <tbody>
+              {d.branchData.map((b: any, i: number) => (
+                <tr key={i} className="border-b border-gray-50 last:border-0">
+                  <td className="px-4 py-2.5 font-medium text-gray-900 text-sm">{b.name}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-gray-600 text-xs">{b.revenue.toFixed(0)}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-amber-600 text-xs">{b.discount.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-center font-mono text-red-600 text-xs">{b.returnAmt.toFixed(2)}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className={`text-xs font-mono font-bold ${b.discRate > 10 ? 'text-red-600' : b.discRate > 5 ? 'text-amber-600' : 'text-green-600'}`}>
+                      {b.discRate.toFixed(1)}%
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 16. Consumption Report ────────────────────────────────────────
+
+function ConsumptionReport({ brand, month }: { brand: string; month: string }) {
+  const [rows, setRows]   = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+  const [capped, setCapped]   = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+
+      const [{ data: purchases }, { data: consumed }, { data: ings }] = await Promise.all([
+        // مجموع المشتريات لكل مادة في الشهر
+        (supabase.from('purchases') as any)
+          .select('ing_sku, ing_name, qty, unit, total_price')
+          .eq('brand_id', brand).gte('purchase_date', start).lte('purchase_date', end),
+        // مجموع الحركات الصادرة (صرف + هدر) لكل مادة في الشهر
+        (supabase.from('stock_movements') as any)
+          .select('ing_sku, ing_name, qty, movement_type')
+          .eq('brand_id', brand).gte('created_at', start + 'T00:00:00').lte('created_at', end + 'T23:59:59')
+          .in('movement_type', ['out', 'waste']).limit(5000),
+        // تكلفة الوحدة الحالية
+        (supabase.from('ingredients') as any).select('sku, name, unit, cost').eq('brand_id', brand),
+      ])
+
+      // بناء map المشتريات
+      const purMap = new Map<string, { name: string; unit: string; qty: number; value: number }>()
+      for (const p of (purchases || []) as any[]) {
+        const ex = purMap.get(p.ing_sku)
+        if (ex) { ex.qty += p.qty; ex.value += p.total_price }
+        else purMap.set(p.ing_sku, { name: p.ing_name, unit: p.unit ?? '—', qty: p.qty, value: p.total_price })
+      }
+
+      // بناء map الاستهلاك
+      const conMap = new Map<string, number>()
+      for (const c of (consumed || []) as any[]) {
+        conMap.set(c.ing_sku, (conMap.get(c.ing_sku) ?? 0) + c.qty)
+      }
+
+      // تكلفة الوحدة
+      const costMap = new Map<string, number>()
+      for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost ?? 0)
+
+      // دمج الكل
+      const allSkus = new Set([...purMap.keys(), ...conMap.keys()])
+      const result: any[] = []
+      for (const sku of allSkus) {
+        const pur = purMap.get(sku)
+        const con = conMap.get(sku) ?? 0
+        const unitCost = costMap.get(sku) ?? (pur ? pur.value / Math.max(pur.qty, 0.001) : 0)
+        const purQty = pur?.qty ?? 0
+        const balance = purQty - con  // فائض = اشترينا أكثر مما صرفنا، عجز = صرفنا من المخزون القديم
+        result.push({
+          sku, name: pur?.name ?? sku, unit: pur?.unit ?? '—',
+          purQty, purValue: pur?.value ?? 0,
+          conQty: con, conValue: con * unitCost,
+          balance, unitCost,
+        })
+      }
+      result.sort((a: any, b: any) => Math.abs(b.balance) - Math.abs(a.balance))
+      setCapped((consumed?.length ?? 0) >= 5000)
+      setRows(result)
+      setLoading(false)
+    }
+    load()
+  }, [brand, month])
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  const totalPurValue = rows.reduce((s: number, r: any) => s + r.purValue, 0)
+  const totalConValue = rows.reduce((s: number, r: any) => s + r.conValue, 0)
+  const filtered = search ? rows.filter((r: any) => r.name.toLowerCase().includes(search.toLowerCase())) : rows
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">استهلاك المواد الخام — {formatYearMonth(month)}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">مقارنة المشتريات بالحركات الصادرة من المخزون</p>
+        </div>
+        {capped && (
+          <div className="text-xs bg-amber-50 border border-amber-200 text-amber-700 px-3 py-1.5 rounded-lg">
+            ⚠ عدد الحركات وصل للحد الأقصى (5000 سجل) — قد لا يكون الشهر مكتملاً
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث بالمادة..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-40 focus:outline-none focus:border-blue-500 bg-white" />
+          <button onClick={async () => {
+            const X = await import('xlsx')
+            const wbk = X.utils.book_new()
+            const ws = X.utils.json_to_sheet(rows.map((r: any) => ({
+              'SKU': r.sku, 'المادة': r.name, 'الوحدة': r.unit,
+              'كمية مشتراة': r.purQty, 'قيمة مشتريات (ر.س)': r.purValue.toFixed(2),
+              'كمية مصروفة': r.conQty, 'قيمة صرف (ر.س)': r.conValue.toFixed(2),
+              'الرصيد': r.balance.toFixed(3),
+            })))
+            ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 16 }, { wch: 10 }]
+            X.utils.book_append_sheet(wbk, ws, 'الاستهلاك')
+            X.writeFile(wbk, `استهلاك_المواد_${month}_${brand}.xlsx`)
+          }}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <KpiCard label="إجمالي قيمة المشتريات" value={`${totalPurValue.toFixed(0)} ر.س`} color="text-blue-700" />
+        <KpiCard label="إجمالي قيمة الصرف" value={`${totalConValue.toFixed(0)} ر.س`} color="text-red-600" />
+        <KpiCard label="الفارق (مخزون + تسريب)" value={`${(totalPurValue - totalConValue).toFixed(0)} ر.س`}
+          color={(totalPurValue - totalConValue) > 0 ? 'text-green-600' : 'text-amber-600'}
+          sub={(totalPurValue - totalConValue) > 0 ? 'مخزون متراكم' : 'صرف من مخزون قديم'} />
+      </div>
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات لهذا الشهر</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">المادة</th>
+                  <th className="text-center px-4 py-3 font-medium bg-blue-50 text-blue-700">كمية مشتراة</th>
+                  <th className="text-center px-4 py-3 font-medium bg-red-50 text-red-700">كمية مصروفة</th>
+                  <th className="text-center px-4 py-3 font-medium">الرصيد</th>
+                  <th className="text-left px-4 py-3 font-medium">قيمة المشتريات</th>
+                  <th className="text-left px-4 py-3 font-medium">قيمة الصرف</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any, i: number) => (
+                  <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{r.name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.sku} · {r.unit}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-blue-700 text-xs font-semibold">
+                      {r.purQty > 0 ? r.purQty.toFixed(3) : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-red-600 text-xs font-semibold">
+                      {r.conQty > 0 ? r.conQty.toFixed(3) : '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className={`font-mono font-bold text-xs ${r.balance > 0 ? 'text-green-600' : r.balance < 0 ? 'text-amber-600' : 'text-gray-400'}`}>
+                        {r.balance !== 0 ? `${r.balance > 0 ? '+' : ''}${r.balance.toFixed(3)}` : '—'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 font-mono text-gray-700 text-xs">{r.purValue > 0 ? `${r.purValue.toFixed(2)} ر.س` : '—'}</td>
+                    <td className="px-4 py-2.5 font-mono text-gray-700 text-xs">{r.conValue > 0 ? `${r.conValue.toFixed(2)} ر.س` : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">
+            <p className="text-xs text-gray-400">الرصيد الموجب = مشتريات أكثر من الصرف (تراكم مخزون). الرصيد السالب = صرف من المخزون القديم أو هدر غير مسجّل.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 17. Compare P&L Between Two Periods ──────────────────────────
+
+interface PLData {
+  rev: number; vat: number; mat: number; labor: number; overhead: number
+  gross: number; net: number; fcPct: number; netPct: number
+}
+
+async function loadPLForMonth(supabase: any, brand: string, m: string): Promise<PLData> {
+  const { start, end } = monthRange(m)
+  const [{ data: sales }, { data: labor }, { data: overhead }] = await Promise.all([
+    (supabase.from('daily_sales') as any).select('revenue, cost').eq('brand_id', brand).gte('sale_date', start).lte('sale_date', end),
+    (supabase.from('labor_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
+    (supabase.from('overhead_costs') as any).select('amount').eq('brand_id', brand).eq('month', m),
+  ])
+  const totalRevVat = (sales || []).reduce((s: number, r: any) => s + r.revenue, 0)
+  const rev       = totalRevVat / VAT_RATE
+  const vat       = totalRevVat - rev
+  const mat       = (sales || []).reduce((s: number, r: any) => s + (r.cost ?? 0), 0)
+  const laborAmt  = (labor || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const ovhAmt    = (overhead || []).reduce((s: number, r: any) => s + r.amount, 0)
+  const gross     = rev - mat
+  const net       = rev - mat - laborAmt - ovhAmt
+  const fcPct     = rev > 0 ? (mat / rev) * 100 : 0
+  const netPct    = rev > 0 ? (net / rev) * 100 : 0
+  return { rev, vat, mat, labor: laborAmt, overhead: ovhAmt, gross, net, fcPct, netPct }
+}
+
+function ComparePLReport({ brand, months }: { brand: string; months: string[] }) {
+  const [periodA, setPeriodA] = useState(months[1] ?? months[0])
+  const [periodB, setPeriodB] = useState(months[0])
+  const [dataA, setDataA]     = useState<PLData | null>(null)
+  const [dataB, setDataB]     = useState<PLData | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!periodA || !periodB) return
+    setLoading(true)
+    const supabase = createClient()
+    Promise.all([loadPLForMonth(supabase, brand, periodA), loadPLForMonth(supabase, brand, periodB)])
+      .then(([a, b]) => { setDataA(a); setDataB(b); setLoading(false) })
+  }, [brand, periodA, periodB])
+
+  const selCls = 'border border-gray-300 rounded-lg px-3 py-2 text-sm text-gray-900 focus:outline-none focus:border-blue-500 bg-white'
+
+  function Delta({ a, b, invert = false }: { a: number; b: number; invert?: boolean }) {
+    if (a === 0 && b === 0) return <span className="text-gray-300 text-xs">—</span>
+    const pct = a !== 0 ? ((b - a) / Math.abs(a)) * 100 : 0
+    const up  = b > a
+    const good = invert ? !up : up
+    return (
+      <span className={`text-xs font-mono font-semibold flex items-center gap-0.5 justify-center ${good ? 'text-green-600' : 'text-red-600'}`}>
+        {up ? '↑' : '↓'} {Math.abs(pct).toFixed(1)}%
+      </span>
+    )
+  }
+
+  const fmt = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+  const pct = (v: number) => `${v.toFixed(1)}%`
+
+  const rows: { label: string; keyA: keyof PLData; keyB: keyof PLData; isBetter: 'higher' | 'lower'; color?: string }[] = [
+    { label: 'الإيراد (قبل VAT)',   keyA: 'rev',      keyB: 'rev',      isBetter: 'higher', color: 'text-blue-700' },
+    { label: 'ضريبة القيمة المضافة', keyA: 'vat',      keyB: 'vat',      isBetter: 'higher', color: 'text-gray-400' },
+    { label: 'تكلفة المواد الخام',   keyA: 'mat',      keyB: 'mat',      isBetter: 'lower',  color: 'text-red-600' },
+    { label: 'FC%',                  keyA: 'fcPct',    keyB: 'fcPct',    isBetter: 'lower',  color: 'text-orange-600' },
+    { label: 'مجمل الربح',           keyA: 'gross',    keyB: 'gross',    isBetter: 'higher', color: 'text-emerald-600' },
+    { label: 'تكاليف العمالة',       keyA: 'labor',    keyB: 'labor',    isBetter: 'lower',  color: 'text-purple-600' },
+    { label: 'التكاليف الثابتة',     keyA: 'overhead', keyB: 'overhead', isBetter: 'lower',  color: 'text-amber-600' },
+    { label: 'صافي الربح',           keyA: 'net',      keyB: 'net',      isBetter: 'higher', color: 'text-emerald-700' },
+    { label: 'هامش صافي%',          keyA: 'netPct',   keyB: 'netPct',   isBetter: 'higher', color: 'text-emerald-600' },
+  ]
+
+  const isPct = (k: string) => k === 'fcPct' || k === 'netPct'
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">مقارنة P&L بين فترتين</h2>
+        <p className="text-xs text-gray-500 mt-0.5">قارن أداء أي شهرَين وحدّد الأفضل والأسوأ</p>
+      </div>
+
+      {/* Period selectors */}
+      <div className="bg-white border border-gray-200 rounded-xl p-5">
+        <div className="grid grid-cols-2 gap-6">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-blue-500 inline-block" />
+              الفترة الأولى (A)
+            </label>
+            <select value={periodA} onChange={e => setPeriodA(e.target.value)} className={`${selCls} w-full`}>
+              {months.map(m => <option key={m} value={m} disabled={m === periodB}>{formatYearMonth(m)}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5 flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-green-500 inline-block" />
+              الفترة الثانية (B)
+            </label>
+            <select value={periodB} onChange={e => setPeriodB(e.target.value)} className={`${selCls} w-full`}>
+              {months.map(m => <option key={m} value={m} disabled={m === periodA}>{formatYearMonth(m)}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {loading && <div className="py-10 text-center text-gray-400">جارٍ المقارنة...</div>}
+
+      {!loading && dataA && dataB && (
+        <>
+          {/* KPI Cards — Headline comparison */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'الإيراد A', value: `${fmt(dataA.rev)} ر.س`, color: 'text-blue-700' },
+              { label: 'الإيراد B', value: `${fmt(dataB.rev)} ر.س`, color: 'text-green-700' },
+              { label: 'صافي الربح A', value: `${fmt(dataA.net)} ر.س`, color: dataA.net >= 0 ? 'text-emerald-700' : 'text-red-700' },
+              { label: 'صافي الربح B', value: `${fmt(dataB.net)} ر.س`, color: dataB.net >= 0 ? 'text-emerald-700' : 'text-red-700' },
+            ].map(c => (
+              <div key={c.label} className="bg-white border border-gray-200 rounded-xl p-4">
+                <div className="text-xs text-gray-500 mb-1">{c.label}</div>
+                <div className={`text-lg font-bold font-mono ${c.color}`}>{c.value}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Comparison table */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="px-5 py-3 border-b border-gray-100 bg-gray-50 grid grid-cols-4 text-xs font-medium text-gray-600">
+              <span>البند</span>
+              <span className="text-center flex items-center gap-1.5 justify-center"><span className="w-2 h-2 rounded-full bg-blue-500 inline-block" />{formatYearMonth(periodA)}</span>
+              <span className="text-center flex items-center gap-1.5 justify-center"><span className="w-2 h-2 rounded-full bg-green-500 inline-block" />{formatYearMonth(periodB)}</span>
+              <span className="text-center">التغيّر (B vs A)</span>
+            </div>
+            <div>
+              {rows.map((row, i) => {
+                const vA = dataA[row.keyA] as number
+                const vB = dataB[row.keyB] as number
+                const isP = isPct(row.keyA as string)
+                return (
+                  <div key={i} className={`grid grid-cols-4 items-center px-5 py-3 border-b border-gray-50 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <span className={`text-sm font-medium ${row.color ?? 'text-gray-800'}`}>{row.label}</span>
+                    <span className="text-center font-mono text-sm text-gray-700">
+                      {isP ? pct(vA) : `${fmt(vA)} ر.س`}
+                    </span>
+                    <span className="text-center font-mono text-sm text-gray-700">
+                      {isP ? pct(vB) : `${fmt(vB)} ر.س`}
+                    </span>
+                    <div className="flex flex-col items-center">
+                      <Delta a={vA} b={vB} invert={row.isBetter === 'lower'} />
+                      {!isP && (
+                        <span className={`text-[10px] font-mono mt-0.5 ${vB >= vA ? 'text-green-500' : 'text-red-500'}`}>
+                          {vB >= vA ? '+' : ''}{(vB - vA).toFixed(0)} ر.س
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Winner banner */}
+          {(() => {
+            const winnerRev    = dataB.rev > dataA.rev ? 'B' : dataA.rev > dataB.rev ? 'A' : '='
+            const winnerMargin = dataB.net > dataA.net ? 'B' : dataA.net > dataB.net ? 'A' : '='
+            const winnerFc     = dataB.fcPct < dataA.fcPct ? 'B' : dataA.fcPct < dataB.fcPct ? 'A' : '='
+            const score = { A: 0, B: 0, '=': 0 }
+            ;[winnerRev, winnerMargin, winnerFc].forEach(w => { if (w !== '=') score[w as 'A' | 'B']++ })
+            const overall = score.B > score.A ? 'B' : score.A > score.B ? 'A' : '='
+            if (overall === '=') return null
+            const winner = overall === 'A' ? { period: formatYearMonth(periodA), color: 'bg-blue-50 border-blue-200 text-blue-800' } : { period: formatYearMonth(periodB), color: 'bg-green-50 border-green-200 text-green-800' }
+            const reasons: string[] = []
+            if (winnerRev === overall) reasons.push('إيراد أعلى')
+            if (winnerFc === overall) reasons.push('FC% أقل')
+            if (winnerMargin === overall) reasons.push('هامش أفضل')
+            return (
+              <div className={`rounded-xl border px-5 py-3 text-sm font-semibold ${winner.color}`}>
+                الفترة الأفضل أداءً: {winner.period} — {reasons.join('، ')}
+              </div>
+            )
+          })()}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── Snapshot Tab ───────────────────────────────────────────────────
+function SnapshotTab({ snapshot, month }: { snapshot: Record<string, any> | null; month: string }) {
+  if (!snapshot) {
+    return (
+      <div className="flex items-center justify-center h-48 text-gray-400 text-sm">
+        لا توجد لقطة محفوظة لهذه الفترة
+      </div>
+    )
+  }
+
+  const inv = (snapshot.closing_inventory ?? []) as any[]
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h2 className="text-base font-bold text-gray-900">لقطة إغلاق {formatYearMonth(month)}</h2>
+        <p className="text-xs text-gray-500 mt-0.5">
+          أُغلقت في {new Date(snapshot.closed_at).toLocaleString('ar-SA')}
+        </p>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">صافي الإيرادات</div>
+          <div className="text-xl font-bold font-mono text-gray-900">
+            {Number(snapshot.sales_net ?? Number(snapshot.sales) / 1.15).toFixed(2)}
+          </div>
+          <div className="text-xs text-gray-400">
+            ر.س · إجمالي {Number(snapshot.sales).toFixed(2)}
+          </div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">COGS</div>
+          <div className="text-xl font-bold font-mono text-gray-900">{Number(snapshot.cogs).toFixed(2)}</div>
+          <div className="text-xs text-gray-400">ر.س</div>
+        </div>
+        <div className={`border rounded-xl p-4 ${Number(snapshot.fc_pct) > 45 ? 'bg-red-50 border-red-200' : Number(snapshot.fc_pct) > 35 ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200'}`}>
+          <div className="text-xs text-gray-500 mb-1">FC%</div>
+          <div className={`text-xl font-bold font-mono ${Number(snapshot.fc_pct) > 45 ? 'text-red-700' : Number(snapshot.fc_pct) > 35 ? 'text-amber-700' : 'text-green-700'}`}>
+            {snapshot.fc_pct}%
+          </div>
+          <div className="text-xs text-gray-400">تكلفة الغذاء</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">مخزون ختامي</div>
+          <div className="text-xl font-bold font-mono text-gray-900">{Number(snapshot.ending_inv_value).toFixed(2)}</div>
+          <div className="text-xs text-gray-400">ر.س</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4">
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">إجمالي المشتريات</div>
+          <div className="text-lg font-bold font-mono text-gray-900">{Number(snapshot.purchases).toFixed(2)} ر.س</div>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-4">
+          <div className="text-xs text-gray-500 mb-1">مجمل الربح</div>
+          <div className="text-lg font-bold font-mono text-gray-900">{Number(snapshot.gross_profit).toFixed(2)} ر.س</div>
+        </div>
+      </div>
+
+      {/* Closing Inventory */}
+      {inv.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="px-4 py-3 bg-gray-50 border-b border-gray-100">
+            <span className="text-sm font-semibold text-gray-900">مخزون آخر المدة — {inv.length} صنف</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 text-xs text-gray-500 bg-gray-50">
+                  <th className="text-right px-4 py-2.5 font-medium">الصنف</th>
+                  <th className="text-center px-4 py-2.5 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-2.5 font-medium">WAC</th>
+                  <th className="text-center px-4 py-2.5 font-medium">القيمة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {inv.map((item: any) => (
+                  <tr key={item.sku} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-800">{item.name}</div>
+                      <div className="text-xs text-gray-400 font-mono">{item.sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700">
+                      {Number(item.qty).toFixed(3)} {item.unit}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600">
+                      {Number(item.cost).toFixed(4)}
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono font-semibold text-gray-800">
+                      {Number(item.value).toFixed(2)} ر.س
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={3} className="px-4 py-3 text-xs font-semibold text-gray-700 text-right">الإجمالي</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-gray-900">
+                    {inv.reduce((s: number, i: any) => s + Number(i.value), 0).toFixed(2)} ر.س
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 19. Waste Report ───────────────────────────────────────────────
+function WasteReport({ brand, month, branch = '' }: { brand: string; month: string; branch?: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [rows, setRows]       = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+      const { start, end } = monthRange(month)
+
+      const q = (supabase.from('stock_movements') as any)
+        .select('ing_sku, ing_name, qty, unit, movement_type, created_at, notes, branch_name, value')
+        .eq('brand_id', brand)
+        .eq('movement_type', 'waste')
+        .gte('created_at', start + 'T00:00:00')
+        .lte('created_at', end + 'T23:59:59')
+        .order('created_at', { ascending: false })
+
+      const { data: movements } = branch ? q.eq('branch_name', branch) : q
+
+      const { data: ings } = await (supabase.from('ingredients') as any)
+        .select('sku, cost').eq('brand_id', brand)
+
+      const costMap = new Map<string, number>()
+      for (const i of (ings || []) as any[]) costMap.set(i.sku, i.cost ?? 0)
+
+      setRows(((movements || []) as any[]).map(r => ({
+        ...r,
+        value: r.value != null ? r.value : r.qty * (costMap.get(r.ing_sku) ?? 0),
+        date: r.created_at?.slice(0, 10) ?? '',
+      })))
+      setLoading(false)
+    }
+    load()
+  }, [brand, month, branch])
+
+  const filtered   = search ? rows.filter(r => r.ing_name?.toLowerCase().includes(search.toLowerCase())) : rows
+  const totalQty   = rows.reduce((s, r) => s + r.qty, 0)
+  const totalValue = rows.reduce((s, r) => s + r.value, 0)
+
+  const topItems = Object.values(
+    rows.reduce((acc: any, r: any) => {
+      if (!acc[r.ing_sku]) acc[r.ing_sku] = { name: r.ing_name, qty: 0, value: 0 }
+      acc[r.ing_sku].qty   += r.qty
+      acc[r.ing_sku].value += r.value
+      return acc
+    }, {})
+  ).sort((a: any, b: any) => b.value - a.value).slice(0, 5) as any[]
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقرير الهدر...')
+    try {
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'التاريخ': r.date, 'المادة': r.ing_name, 'الكمية': r.qty, 'الوحدة': r.unit,
+        'القيمة (ر.س)': r.value.toFixed(4), 'الفرع': r.branch_name ?? '', 'ملاحظات': r.notes ?? '',
+      })))
+      ws['!cols'] = [{ wch: 12 }, { wch: 28 }, { wch: 10 }, { wch: 8 }, { wch: 14 }, { wch: 14 }, { wch: 20 }]
+      X.utils.book_append_sheet(wb, ws, 'الهدر والفاقد')
+      X.writeFile(wb, `تقرير_الهدر_${month}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقرير الهدر والفاقد — {formatYearMonth(month)}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{rows.length} حركة هدر مسجّلة</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث بالمادة..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-40 focus:outline-none focus:border-blue-500 bg-white" />
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <KpiCard label="إجمالي قيمة الهدر" value={`${totalValue.toFixed(2)} ر.س`} color="text-red-600" sub={formatYearMonth(month)} />
+        <KpiCard label="عدد سجلات الهدر" value={String(rows.length)} color="text-gray-700" />
+        <KpiCard label="أعلى مادة هدراً" value={topItems[0]?.name ?? '—'} sub={topItems[0] ? `${topItems[0].value.toFixed(2)} ر.س` : undefined} color="text-amber-700" />
+      </div>
+
+      {topItems.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>أعلى 5 مواد هدراً (قيمة)</SectionTitle>
+          <div className="space-y-2">
+            {topItems.map((item: any) => (
+              <div key={item.name} className="flex items-center gap-3">
+                <div className="text-xs text-gray-700 w-32 truncate">{item.name}</div>
+                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-400 rounded-full" style={{ width: `${Math.min(totalValue > 0 ? (item.value / totalValue) * 100 : 0, 100)}%` }} />
+                </div>
+                <div className="text-xs font-mono text-red-600 w-24 text-left">{item.value.toFixed(2)} ر.س</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد سجلات هدر لهذا الشهر</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">التاريخ</th>
+                  <th className="text-right px-4 py-3 font-medium">المادة</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة</th>
+                  <th className="text-right px-4 py-3 font-medium">الفرع</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any, i: number) => (
+                  <tr key={i} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5 text-xs font-mono text-gray-500">{r.date}</td>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{r.ing_name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.ing_sku}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-center font-mono text-red-600 text-xs font-semibold">{r.qty.toFixed(3)} {r.unit}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-red-700 text-xs font-semibold">{r.value > 0 ? `${r.value.toFixed(2)} ر.س` : '—'}</td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500">{r.branch_name ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={2} className="px-4 py-3 text-xs font-semibold text-gray-700">الإجمالي</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-red-600 text-xs">{totalQty.toFixed(3)}</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-red-700 text-xs">{totalValue.toFixed(2)} ر.س</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 20. Live Inventory Valuation ───────────────────────────────────
+function InvValuationReport({ brand }: { brand: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [rows, setRows]       = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [search, setSearch]   = useState('')
+  const [catFilter, setCatFilter] = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      const supabase = createClient()
+
+      const [{ data: stocks }, { data: ings }] = await Promise.all([
+        (supabase.from('stock_items') as any)
+          .select('ing_sku, ing_name, current_qty, unit, updated_at')
+          .eq('brand_id', brand)
+          .gt('current_qty', 0),
+        (supabase.from('ingredients') as any)
+          .select('sku, cost, category')
+          .eq('brand_id', brand),
+      ])
+
+      const ingMap = new Map<string, { cost: number; category: string }>()
+      for (const i of (ings || []) as any[]) ingMap.set(i.sku, { cost: i.cost ?? 0, category: i.category ?? 'غير محدد' })
+
+      const result = ((stocks || []) as any[]).map(s => {
+        const ing      = ingMap.get(s.ing_sku)
+        const cost     = ing?.cost ?? 0
+        const value    = s.current_qty * cost
+        const lastMove = s.updated_at?.slice(0, 10) ?? ''
+        const daysSince = lastMove ? Math.floor((Date.now() - new Date(lastMove).getTime()) / 86400000) : 999
+        return {
+          sku: s.ing_sku, name: s.ing_name, unit: s.unit,
+          qty: s.current_qty, cost, value,
+          category: ing?.category ?? 'غير محدد',
+          isStale: daysSince > 30, daysSince,
+        }
+      }).sort((a, b) => b.value - a.value)
+
+      setRows(result)
+      setLoading(false)
+    }
+    load()
+  }, [brand])
+
+  const categories = [...new Set(rows.map(r => r.category))].sort()
+  const filtered   = rows.filter(r => {
+    if (catFilter && r.category !== catFilter) return false
+    if (search && !r.name.toLowerCase().includes(search.toLowerCase())) return false
+    return true
+  })
+
+  const totalValue = filtered.reduce((s, r) => s + r.value, 0)
+  const staleItems = rows.filter(r => r.isStale)
+  const staleValue = staleItems.reduce((s, r) => s + r.value, 0)
+
+  const catData = Object.entries(
+    rows.reduce((acc: any, r: any) => { acc[r.category] = (acc[r.category] ?? 0) + r.value; return acc }, {})
+  ).map(([name, value]) => ({ name, value: value as number })).sort((a, b) => b.value - a.value)
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقييم المخزون...')
+    try {
+      const X = await import('xlsx')
+      const wb = X.utils.book_new()
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'SKU': r.sku, 'المادة': r.name, 'الفئة': r.category, 'الوحدة': r.unit,
+        'الكمية الحالية': r.qty, 'التكلفة/وحدة (ر.س)': r.cost.toFixed(4),
+        'القيمة الإجمالية (ر.س)': r.value.toFixed(2), 'راكد +30 يوم': r.isStale ? 'نعم' : '',
+      })))
+      ws['!cols'] = [{ wch: 14 }, { wch: 28 }, { wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 12 }]
+      X.utils.book_append_sheet(wb, ws, 'تقييم المخزون')
+      X.writeFile(wb, `تقييم_المخزون_${new Date().toLocaleDateString('en-CA')}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loading) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقييم المخزون الحي</h2>
+          <p className="text-xs text-gray-500 mt-0.5">{rows.length} صنف · {new Date().toLocaleDateString('ar-SA')}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="text" placeholder="بحث..." value={search} onChange={e => setSearch(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-36 focus:outline-none focus:border-blue-500 bg-white" />
+          <select value={catFilter} onChange={e => setCatFilter(e.target.value)}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:border-blue-500 bg-white">
+            <option value="">كل الفئات</option>
+            {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <KpiCard label="إجمالي قيمة المخزون" value={`${rows.reduce((s, r) => s + r.value, 0).toFixed(2)} ر.س`} color="text-blue-700" />
+        <KpiCard label="أصناف راكدة (+30 يوم)" value={String(staleItems.length)} color={staleItems.length > 0 ? 'text-amber-700' : 'text-green-700'} sub={staleValue > 0 ? `${staleValue.toFixed(2)} ر.س` : undefined} />
+        <KpiCard label="أصناف بمخزون" value={String(rows.length)} color="text-gray-700" />
+      </div>
+
+      {catData.length > 1 && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5">
+          <SectionTitle>توزيع القيمة بالفئة</SectionTitle>
+          <div className="space-y-2">
+            {catData.map(c => (
+              <div key={c.name} className="flex items-center gap-3">
+                <div className="text-xs text-gray-700 w-28 truncate">{c.name}</div>
+                <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full" style={{ width: `${catData[0].value > 0 ? Math.min((c.value / catData[0].value) * 100, 100) : 0}%` }} />
+                </div>
+                <div className="text-xs font-mono text-blue-700 w-24 text-left">{c.value.toFixed(0)} ر.س</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {staleItems.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+          <p className="text-sm font-semibold text-amber-800">{staleItems.length} صنف راكد (+30 يوم بلا حركة) — قيمة: {staleValue.toFixed(2)} ر.س</p>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {staleItems.slice(0, 8).map(i => (
+              <span key={i.sku} className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">{i.name}</span>
+            ))}
+            {staleItems.length > 8 && <span className="text-xs text-amber-500">+{staleItems.length - 8} أخرى</span>}
+          </div>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بيانات</div>
+      ) : (
+        <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table suppressHydrationWarning className="w-full text-sm">
+              <thead>
+                <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                  <th className="text-right px-4 py-3 font-medium">المادة</th>
+                  <th className="text-right px-4 py-3 font-medium">الفئة</th>
+                  <th className="text-center px-4 py-3 font-medium">الكمية</th>
+                  <th className="text-center px-4 py-3 font-medium">التكلفة/وحدة</th>
+                  <th className="text-center px-4 py-3 font-medium">القيمة</th>
+                  <th className="text-center px-4 py-3 font-medium">الحالة</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((r: any, i: number) => (
+                  <tr key={r.sku} className={`border-b border-gray-100 last:border-0 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                    <td className="px-4 py-2.5">
+                      <div className="font-medium text-gray-900 text-xs">{r.name}</div>
+                      <div className="text-[10px] text-gray-400 font-mono">{r.sku} · {r.unit}</div>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-gray-500">{r.category}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-700 text-xs">{r.qty.toFixed(3)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono text-gray-600 text-xs">{r.cost.toFixed(4)}</td>
+                    <td className="px-4 py-2.5 text-center font-mono font-semibold text-blue-700 text-xs">{r.value.toFixed(2)} ر.س</td>
+                    <td className="px-4 py-2.5 text-center">
+                      {r.isStale
+                        ? <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">راكد {r.daysSince}ي</span>
+                        : <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-700">نشط</span>
+                      }
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 border-gray-200 bg-gray-50">
+                  <td colSpan={4} className="px-4 py-3 text-xs font-semibold text-gray-700">الإجمالي ({filtered.length} صنف)</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-blue-700 text-xs">{totalValue.toFixed(2)} ر.س</td>
+                  <td />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── 20. Stocktake Variance Report ────────────────────────────────
+function StocktakeVarianceReport({ brand }: { brand: string }) {
+  const { startLoading, stopLoading } = useGlobalLoading()
+  const [sessions, setSessions]           = useState<any[]>([])
+  const [selectedId, setSelectedId]       = useState<string | null>(null)
+  const [items, setItems]                 = useState<any[]>([])
+  const [loadingSessions, setLoadingSess] = useState(true)
+  const [loadingItems, setLoadingItems]   = useState(false)
+
+  useEffect(() => {
+    const load = async () => {
+      const supabase = createClient()
+      const { data } = await (supabase.from('stocktake_sessions') as any)
+        .select('id, session_date, notes, status, finalized_at')
+        .eq('brand_id', brand)
+        .in('status', ['finalized', 'approved'])
+        .order('session_date', { ascending: false })
+      const list = data ?? []
+      setSessions(list)
+      if (list.length > 0) setSelectedId(list[0].id)
+      setLoadingSess(false)
+    }
+    load()
+  }, [brand])
+
+  useEffect(() => {
+    if (!selectedId) return
+    const load = async () => {
+      setLoadingItems(true)
+      const supabase = createClient()
+      const { data } = await (supabase.from('stocktake_items') as any)
+        .select('id, ing_sku, ing_name, item_type, theoretical_qty, actual_qty, unit_cost, unit')
+        .eq('session_id', selectedId)
+        .order('ing_name')
+      setItems(data ?? [])
+      setLoadingItems(false)
+    }
+    load()
+  }, [selectedId])
+
+  const rows = items.map(i => {
+    const variance       = (i.actual_qty ?? 0) - (i.theoretical_qty ?? 0)
+    const variance_value = variance * (i.unit_cost ?? 0)
+    return { ...i, variance, variance_value }
+  })
+
+  const positiveValue  = rows.filter(r => r.variance > 0.001).reduce((s, r) => s + r.variance_value, 0)
+  const negativeValue  = rows.filter(r => r.variance < -0.001).reduce((s, r) => s + r.variance_value, 0)
+  const netValue       = positiveValue + negativeValue
+  const withVariance   = rows.filter(r => Math.abs(r.variance) >= 0.001).length
+
+  async function exportExcel() {
+    startLoading('جارٍ تصدير تقرير فروق الجرد...')
+    try {
+      const X   = await import('xlsx')
+      const wb2 = X.utils.book_new()
+      const session = sessions.find(s => s.id === selectedId)
+      const ws = X.utils.json_to_sheet(rows.map(r => ({
+        'المادة/المنتج':    r.ing_name,
+        'الكمية النظرية':   r.theoretical_qty?.toFixed(3) ?? '0',
+        'الكمية الفعلية':   r.actual_qty?.toFixed(3) ?? '0',
+        'الفرق (كمية)':     r.variance.toFixed(3),
+        'التكلفة/وحدة':     (r.unit_cost ?? 0).toFixed(4),
+        'قيمة الفرق (ر.س)': r.variance_value.toFixed(2),
+      })))
+      ws['!cols'] = [{ wch: 30 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 18 }]
+      X.utils.book_append_sheet(wb2, ws, 'فروق الجرد')
+      X.writeFile(wb2, `فروق_الجرد_${session?.session_date ?? ''}_${brand}.xlsx`)
+    } finally {
+      stopLoading()
+    }
+  }
+
+  if (loadingSessions) return <div className="py-16 text-center text-gray-400">جارٍ التحميل...</div>
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold text-gray-900">تقرير فروق الجرد الدوري</h2>
+          <p className="text-xs text-gray-500 mt-0.5">مقارنة الكميات الفعلية بالنظرية لجلسات الجرد المُنهاة</p>
+        </div>
+        {selectedId && (
+          <button onClick={exportExcel}
+            className="text-xs px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium">
+            ⬇ Excel
+          </button>
+        )}
+      </div>
+
+      {sessions.length === 0 ? (
+        <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">
+          لا توجد جلسات جرد مُكتملة بعد — أنهِ جلسة جرد أولاً من صفحة المخزون
+        </div>
+      ) : (
+        <>
+          <div className="bg-white border border-gray-200 rounded-xl p-5">
+            <label className="text-sm font-medium text-gray-700 block mb-2">اختر جلسة جرد</label>
+            <select value={selectedId ?? ''} onChange={e => setSelectedId(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-full max-w-xs focus:outline-none focus:border-blue-500 bg-white">
+              {sessions.map(s => (
+                <option key={s.id} value={s.id}>
+                  {s.session_date} — {s.status === 'approved' ? 'مُعتمد' : 'مُنهى'}{s.notes ? ` · ${s.notes}` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {loadingItems ? (
+            <div className="py-8 text-center text-gray-400">جارٍ تحميل بنود الجلسة...</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <KpiCard label="فروق موجبة (زيادة)" value={`${positiveValue.toFixed(2)} ر.س`} color="text-emerald-600"
+                  sub={`${rows.filter(r => r.variance > 0.001).length} صنف`} />
+                <KpiCard label="فروق سالبة (نقص)" value={`${Math.abs(negativeValue).toFixed(2)} ر.س`} color="text-red-600"
+                  sub={`${rows.filter(r => r.variance < -0.001).length} صنف`} />
+                <KpiCard label="صافي الفرق" value={`${netValue >= 0 ? '+' : ''}${netValue.toFixed(2)} ر.س`}
+                  color={netValue >= 0 ? 'text-emerald-600' : 'text-red-600'} />
+                <KpiCard label="أصناف بفرق" value={`${withVariance} صنف`} color="text-gray-700"
+                  sub={`من ${rows.length} إجمالي`} />
+              </div>
+
+              {rows.length === 0 ? (
+                <div className="bg-white border border-gray-200 rounded-xl p-12 text-center text-gray-400">لا توجد بنود في هذه الجلسة</div>
+              ) : (
+                <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table suppressHydrationWarning className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200 text-xs text-gray-500">
+                          <th className="text-right px-4 py-3 font-medium">المادة/المنتج</th>
+                          <th className="text-center px-4 py-3 font-medium">نظري</th>
+                          <th className="text-center px-4 py-3 font-medium">فعلي</th>
+                          <th className="text-center px-4 py-3 font-medium">الفرق</th>
+                          <th className="text-center px-4 py-3 font-medium">قيمة الفرق</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rows.map((r: any, i: number) => {
+                          const hasVar = Math.abs(r.variance) >= 0.001
+                          const isPos  = r.variance > 0.001
+                          return (
+                            <tr key={i} className={`border-b border-gray-100 last:border-0 ${hasVar ? (isPos ? 'bg-green-50/30' : 'bg-red-50/30') : ''}`}>
+                              <td className="px-4 py-2.5">
+                                <div className="font-medium text-gray-900 text-xs">{r.ing_name}</div>
+                                <div className="text-[10px] text-gray-400 font-mono">{r.ing_sku}</div>
+                              </td>
+                              <td className="px-4 py-2.5 text-center font-mono text-gray-600 text-xs">{(r.theoretical_qty ?? 0).toFixed(3)}</td>
+                              <td className="px-4 py-2.5 text-center font-mono text-gray-900 text-xs font-medium">{(r.actual_qty ?? 0).toFixed(3)}</td>
+                              <td className={`px-4 py-2.5 text-center font-mono text-xs font-semibold ${!hasVar ? 'text-gray-400' : isPos ? 'text-emerald-600' : 'text-red-600'}`}>
+                                {hasVar ? `${isPos ? '+' : ''}${r.variance.toFixed(3)}` : '—'}
+                              </td>
+                              <td className={`px-4 py-2.5 text-center font-mono text-xs font-semibold ${!hasVar ? 'text-gray-400' : isPos ? 'text-emerald-600' : 'text-red-600'}`}>
+                                {hasVar ? `${isPos ? '+' : ''}${r.variance_value.toFixed(2)} ر.س` : '—'}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  )
+}

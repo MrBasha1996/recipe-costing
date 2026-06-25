@@ -1,0 +1,128 @@
+import { create } from 'zustand'
+import type { PermissionsMap, PermissionAction } from '@/types'
+import type { SupabaseClient } from '@supabase/supabase-js'
+
+interface PermissionsStore {
+  permissions: PermissionsMap
+  isSuperAdmin: boolean
+  roleName: string | null
+  loaded: boolean
+  _realtimeChannel: any | null
+  initFromServer: (permissions: PermissionsMap, isSuperAdmin: boolean, roleName: string | null) => void
+  subscribeToChanges: (userId: string, supabase: SupabaseClient) => Promise<void>
+  loadPermissions: (userId: string, supabase: SupabaseClient) => Promise<void>
+  hasPermission: (module: string, action: PermissionAction) => boolean
+  reset: () => void
+}
+
+export const usePermissionsStore = create<PermissionsStore>((set, get) => ({
+  permissions: {},
+  isSuperAdmin: false,
+  roleName: null,
+  loaded: false,
+  _realtimeChannel: null,
+
+  initFromServer: (permissions: PermissionsMap, isSuperAdmin: boolean, roleName: string | null) => {
+    set({ permissions, isSuperAdmin, roleName, loaded: true })
+  },
+
+  subscribeToChanges: async (userId: string, supabase: SupabaseClient) => {
+    const prev = get()._realtimeChannel
+    if (prev) await supabase.removeChannel(prev)
+    const channel = (supabase.channel(`user_profile_${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}`) as any)
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'user_profiles',
+        filter: `id=eq.${userId}`,
+      }, () => {
+        get().loadPermissions(userId, supabase)
+      })
+      .subscribe()
+    set({ _realtimeChannel: channel })
+  },
+
+  loadPermissions: async (userId: string, supabase: SupabaseClient) => {
+    try {
+      // Get user's role_id
+      const { data: profile } = await (supabase.from('user_profiles') as any)
+        .select('role_id, roles(is_super_admin, name)')
+        .eq('id', userId)
+        .single()
+
+      if (!profile?.role_id) {
+        set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: true })
+        return
+      }
+
+      const isSuperAdmin = (profile.roles as any)?.is_super_admin === true
+      const roleName: string | null = (profile.roles as any)?.name ?? null
+
+      if (isSuperAdmin) {
+        set({ permissions: {}, isSuperAdmin: true, roleName, loaded: true })
+        return
+      }
+
+      // Fetch permissions and modules separately to avoid PostgREST join issues
+      const { data: rp } = await (supabase.from('role_permissions') as any)
+        .select('module_id, can_view, can_create, can_update, can_delete, can_approve, can_import, can_edit_price, can_post, can_print, can_export')
+        .eq('role_id', profile.role_id)
+
+      const moduleIds = ((rp || []) as any[]).map((r: any) => r.module_id).filter(Boolean)
+
+      const { data: modules } = moduleIds.length > 0
+        ? await (supabase.from('modules') as any).select('id, code').in('id', moduleIds)
+        : { data: [] }
+
+      const moduleCodeMap: Record<string, string> = {}
+      for (const m of (modules || []) as any[]) {
+        moduleCodeMap[m.id] = m.code
+      }
+
+      const map: PermissionsMap = {}
+      for (const row of (rp || []) as any[]) {
+        const code = moduleCodeMap[row.module_id]
+        if (code) {
+          map[code] = {
+            can_view:       row.can_view,
+            can_create:     row.can_create,
+            can_update:     row.can_update,
+            can_delete:     row.can_delete,
+            can_approve:    row.can_approve    ?? false,
+            can_import:     row.can_import     ?? false,
+            can_edit_price: row.can_edit_price ?? false,
+            can_post:       row.can_post       ?? false,
+            can_print:      row.can_print      ?? false,
+            can_export:     row.can_export     ?? false,
+          }
+        }
+      }
+
+      set({ permissions: map, isSuperAdmin: false, roleName, loaded: true })
+    } catch (err) {
+      console.error('[permissionsStore] Failed to load permissions:', err)
+      set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: true })
+    }
+  },
+
+  hasPermission: (module: string, action: PermissionAction): boolean => {
+    const { isSuperAdmin, permissions } = get()
+    if (isSuperAdmin) return true
+    const p = permissions[module]
+    if (!p) return false
+    switch (action) {
+      case 'view':       return p.can_view
+      case 'create':     return p.can_create
+      case 'update':     return p.can_update
+      case 'delete':     return p.can_delete
+      case 'approve':    return p.can_approve
+      case 'import':     return p.can_import
+      case 'edit_price': return p.can_edit_price
+      case 'post':       return p.can_post
+      case 'print':      return p.can_print
+      case 'export':     return p.can_export
+    }
+  },
+
+  reset: () => set({ permissions: {}, isSuperAdmin: false, roleName: null, loaded: false, _realtimeChannel: null }),
+}))
